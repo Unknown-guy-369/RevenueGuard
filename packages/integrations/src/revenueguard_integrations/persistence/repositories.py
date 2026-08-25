@@ -9,7 +9,7 @@ from hashlib import sha256
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import Select, and_, or_, select, text, update
+from sqlalchemy import Select, and_, case, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,7 @@ from revenueguard_integrations.persistence.models import (
     Subscription,
     WebhookEvent,
 )
+from revenueguard_integrations.persistence.status_ordering import PROVIDER_STATUS_PRECEDENCE
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,12 +155,11 @@ class EventIngestionRepository:
                 "provider_updated_at": insert_statement.excluded.provider_updated_at,
                 "updated_at": datetime.now(UTC),
             },
-            where=or_(
-                Payment.provider_updated_at.is_(None),
-                and_(
-                    insert_statement.excluded.provider_updated_at.is_not(None),
-                    insert_statement.excluded.provider_updated_at >= Payment.provider_updated_at,
-                ),
+            where=_provider_update_is_authoritative(
+                current_status=Payment.status,
+                current_updated_at=Payment.provider_updated_at,
+                excluded_status=insert_statement.excluded.status,
+                excluded_updated_at=insert_statement.excluded.provider_updated_at,
             ),
         ).returning(Payment)
         result = (await self._session.scalars(statement)).one_or_none()
@@ -203,13 +203,11 @@ class EventIngestionRepository:
                 "provider_updated_at": insert_statement.excluded.provider_updated_at,
                 "updated_at": datetime.now(UTC),
             },
-            where=or_(
-                Subscription.provider_updated_at.is_(None),
-                and_(
-                    insert_statement.excluded.provider_updated_at.is_not(None),
-                    insert_statement.excluded.provider_updated_at
-                    >= Subscription.provider_updated_at,
-                ),
+            where=_provider_update_is_authoritative(
+                current_status=Subscription.status,
+                current_updated_at=Subscription.provider_updated_at,
+                excluded_status=insert_statement.excluded.status,
+                excluded_updated_at=insert_statement.excluded.provider_updated_at,
             ),
         ).returning(Subscription)
         result = (await self._session.scalars(statement)).one_or_none()
@@ -588,6 +586,38 @@ class EventIngestionRepository:
                 )
             )
         ).one()
+
+
+def _provider_update_is_authoritative(
+    *,
+    current_status: Any,
+    current_updated_at: Any,
+    excluded_status: Any,
+    excluded_updated_at: Any,
+) -> Any:
+    current_rank = case(
+        PROVIDER_STATUS_PRECEDENCE,
+        value=current_status,
+        else_=0,
+    )
+    excluded_rank = case(
+        PROVIDER_STATUS_PRECEDENCE,
+        value=excluded_status,
+        else_=0,
+    )
+    return or_(
+        current_updated_at.is_(None),
+        and_(
+            excluded_updated_at.is_not(None),
+            or_(
+                excluded_updated_at > current_updated_at,
+                and_(
+                    excluded_updated_at == current_updated_at,
+                    excluded_rank >= current_rank,
+                ),
+            ),
+        ),
+    )
 
 
 def _as_datetime(value: Any, field_name: str) -> datetime:

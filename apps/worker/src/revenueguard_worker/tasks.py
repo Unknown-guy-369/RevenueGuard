@@ -1,4 +1,4 @@
-"""Diagnostic and durable Phase 2 event-ingestion worker tasks."""
+"""Durable event-ingestion and Phase 3 recovery-decision worker tasks."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Literal, TypedDict, cast
 from revenueguard_integrations.persistence import (
     EventDispatch,
     EventIngestionRepository,
+    RecoveryRepository,
     create_database_engine,
     create_session_factory,
     session_scope,
@@ -18,6 +19,7 @@ from revenueguard_integrations.razorpay import (
     RazorpayEventError,
     normalize_razorpay_event,
 )
+from revenueguard_integrations.recovery import RecoveryApplicationService
 from sqlalchemy import select
 
 from revenueguard_worker.celery_app import celery_app
@@ -177,10 +179,14 @@ async def _process_webhook_event(
         )
         document = cast(Mapping[str, object], webhook.raw_payload or {})
         await _upsert_provider_entities(repository, event.to_dict(), document)
-        await repository.persist_normalized_event(
+        normalized = await repository.persist_normalized_event(
             event=event.to_dict(),
             webhook_event_id=webhook_event_id,
             correlations=_event_correlations(event.to_dict()),
+        )
+        await RecoveryApplicationService(RecoveryRepository(session)).process_event(
+            merchant_id=merchant_id,
+            normalized_event_id=normalized.id,
         )
         await repository.mark_dispatch_succeeded(
             dispatch_id=dispatch_id,
@@ -234,6 +240,7 @@ async def _upsert_provider_entities(
     payment_id = cast(str | None, event.get("payment_id"))
     payment = _provider_entity(document, "payment")
     if payment_id is not None:
+        payment_occurred = _provider_timestamp(payment, "created_at") or occurred_at
         await repository.upsert_payment(
             merchant_id=merchant_id,
             payment_id=payment_id,
@@ -243,13 +250,14 @@ async def _upsert_provider_entities(
             amount_minor=cast(int, event["amount_minor"]),
             currency=cast(str, event["currency"]),
             status=_entity_status(payment, cast(str, event["event_type"])),
-            provider_occurred_at=occurred_at,
-            provider_updated_at=_entity_updated_at(payment, occurred_at),
+            provider_occurred_at=payment_occurred,
+            provider_updated_at=occurred_at,
         )
 
     subscription_id = cast(str | None, event.get("subscription_id"))
     subscription = _provider_entity(document, "subscription")
     if subscription_id is not None:
+        subscription_occurred = _provider_timestamp(subscription, "created_at") or occurred_at
         await repository.upsert_subscription(
             merchant_id=merchant_id,
             subscription_id=subscription_id,
@@ -258,8 +266,8 @@ async def _upsert_provider_entities(
             amount_minor=cast(int, event["amount_minor"]),
             currency=cast(str, event["currency"]),
             status=_entity_status(subscription, cast(str, event["event_type"])),
-            provider_occurred_at=occurred_at,
-            provider_updated_at=_entity_updated_at(subscription, occurred_at),
+            provider_occurred_at=subscription_occurred,
+            provider_updated_at=occurred_at,
         )
 
 
@@ -308,16 +316,16 @@ def _entity_status(entity: Mapping[str, object] | None, event_type: str) -> str:
     return event_type.rsplit(".", maxsplit=1)[-1].upper()
 
 
-def _entity_updated_at(entity: Mapping[str, object] | None, fallback: datetime) -> datetime:
+def _provider_timestamp(entity: Mapping[str, object] | None, key: str) -> datetime | None:
     if entity is None:
-        return fallback
-    timestamp = entity.get("created_at")
+        return None
+    timestamp = entity.get(key)
     if isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp < 0:
-        return fallback
+        return None
     try:
         return datetime.fromtimestamp(timestamp, UTC)
     except OverflowError, OSError, ValueError:
-        return fallback
+        return None
 
 
 def _event_datetime(value: object) -> datetime:

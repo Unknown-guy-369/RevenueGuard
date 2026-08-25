@@ -6,9 +6,9 @@ This file records durable, repository-level implementation context for future Re
 
 ## Current status
 
-- Completed milestone: Phase 2 — event ingestion and persistence.
-- Previous milestone: Phase 1 scaffold complete.
-- Money movement, customer contact, case policy, and recovered-revenue accounting remain disabled.
+- Completed milestone: Phase 3 — recovery domain and deterministic policy decisioning.
+- Previous milestones: Phase 1 scaffold and Phase 2 event ingestion/persistence.
+- Money movement, customer contact, action execution, outcome verification, and recovered-revenue accounting remain disabled.
 - Razorpay integration is restricted to Test Mode fixtures and authenticated webhook ingestion.
 
 ## Phase 2 acceptance checklist
@@ -24,6 +24,18 @@ This file records durable, repository-level implementation context for future Re
 - [x] Provide normal, duplicate, invalid-signature, delayed, burst, and out-of-order replay modes.
 - [x] Pass migration, contract, tenant-isolation, targeted, and full repository verification.
 
+## Phase 3 acceptance checklist
+
+- [x] Enforce the canonical recovery-case state graph in domain code and PostgreSQL.
+- [x] Require authoritative evidence before a case can transition to `RECOVERED`.
+- [x] Diagnose supported failures and rank deterministic, reproducible candidates.
+- [x] Apply versioned, currency-bound merchant policy with consent, ceiling, incident, quiet-hour, expected-value, unknown-outcome, cross-workflow contact, and human-review guardians.
+- [x] Persist immutable policy versions, transitions, decision receipts, evidence links, and action-bound human reviews.
+- [x] Process normalized events, due deferred cases, and human decisions transactionally without initiating Phase 4 effects.
+- [x] Run recovery decisioning before worker dispatch completion in the normalization transaction.
+- [x] Prove replay/crash idempotency, tenant isolation, optimistic concurrency, provider-truth ordering, and append-only database enforcement.
+- [x] Validate both clean and `0003 -> 0004` migrations in disposable databases.
+
 ## Architecture and safety decisions
 
 - PostgreSQL is authoritative; Redis/Celery carries disposable at-least-once delivery state.
@@ -33,6 +45,8 @@ This file records durable, repository-level implementation context for future Re
 - The inbox transaction creates a durable dispatch record; broker publication is recoverable and is not part of the webhook acknowledgement boundary.
 - Provider occurrence time, system receive time, and system processing time remain distinct.
 - Phase 2 creates no recovery action and counts no recovered money.
+- Phase 3 stops at `READY`; it creates no action outbox row and cannot enter `EXECUTING`.
+- Every policy evaluation records the exact policy/application/schema/feature versions and complete candidate action identity.
 
 ## Implemented components
 
@@ -43,6 +57,7 @@ This file records durable, repository-level implementation context for future Re
 - Celery beat dispatcher and ingestion worker with at-least-once idempotency, bounded retry/backoff, expired-lease recovery, dead-letter retention, and explicit operator replay metadata.
 - Four sanitized `SYNTHETIC` Razorpay-shaped fixtures, normalized contract snapshots, six-mode HTTP replay CLI, merchant bootstrap CLI, and dead-letter requeue CLI.
 - README, dashboard status, environment template, Make targets, locked dependencies, and API/worker container wiring updated for Phase 2.
+- Phase 3 recovery-case, diagnosis, policy, review, persistence, service, migration, worker integration, and conservative merchant-policy bootstrap are implemented.
 
 ## Verification ledger
 
@@ -55,9 +70,16 @@ This file records durable, repository-level implementation context for future Re
 - `docker build --file deploy/docker/worker.Dockerfile --tag revenueguard-worker:phase2 .` — passed.
 - Secret-pattern scan and `git diff --check` — passed; only the documented placeholder webhook secret matched.
 
+### Phase 3 verification
+
+- `make check` — passed: Ruff format/lint, strict mypy (40 source files), 291 Python tests, 36 contract subtests, frontend Prettier/ESLint/TypeScript, 1 Vitest test, Next.js production build, and Docker Compose validation.
+- PostgreSQL integration suite — 13 tests passed with zero skips; includes tenant isolation, row locks, recovery replay/crash behavior, human approval revalidation, deferred resume, and provider authority.
+- Disposable migration tests — clean `base -> head` and incremental `0003 -> 0004` passed; `alembic current` and `alembic check` passed; seeded policy digest reconstruction and append-only triggers were verified.
+- `docker build --file deploy/docker/worker.Dockerfile --tag revenueguard-worker:local .` — passed.
+- Secret-pattern scan and `git diff --check` — passed.
+
 ## Known limitations and follow-ups
 
-- Phase 3 owns recovery-case transitions and deterministic merchant policy.
 - Phase 4 owns financial/customer-contact actions, action idempotency, and outcome verification.
 - The Phase 2 composition supports one configured Test Mode merchant webhook secret per API instance. Multi-merchant secret-manager lookup, rotation, ingress rate limiting, and retention enforcement remain production-hardening work; the current path fails closed and does not log secrets.
-- Local verification containers were stopped and named volumes were preserved. Synthetic smoke rows under `merchant_001` and `merchant_runtime_smoke` remain in the local development PostgreSQL volume because deleting database records requires separate destructive-action authorization.
+- Phase 3 verification used the existing healthy local PostgreSQL and Redis containers. Disposable schemas/databases were removed; no pre-existing development records or named volumes were deleted.

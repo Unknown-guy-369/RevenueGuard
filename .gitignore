@@ -33,3 +33,5 @@ celerybeat-schedule
 
 # Local browser verification artifacts
 output/playwright/
+
+.agents

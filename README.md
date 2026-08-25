@@ -2,7 +2,7 @@
 
 RevenueGuard is a bounded, event-driven revenue recovery control plane for Razorpay merchants. It is designed to detect revenue at risk, coordinate safe recovery decisions, apply deterministic merchant policy, execute approved actions idempotently, and count recovered money only after authoritative verification.
 
-> **Current status — Phase 2:** authenticated Razorpay webhook ingestion, the durable event inbox, normalized event persistence, recoverable asynchronous dispatch, and replay tooling are implemented on top of the Phase 1 scaffold. No payment, customer-contact, recovery-action, or recovered-revenue path is enabled.
+> **Current status — Phase 3 complete:** recovery case and deterministic policy decisioning are active. Money movement, customer contact, action execution, outcome verification, and recovered-revenue accounting remain disabled until Phase 4.
 
 ## Safety model
 

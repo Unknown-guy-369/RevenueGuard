@@ -51,12 +51,12 @@ def test_event_correlations_are_typed_and_only_persist_present_ids() -> None:
     )
 
 
-def test_entity_update_time_falls_back_safely() -> None:
-    fallback = datetime(2026, 8, 25, tzinfo=UTC)
-
-    assert tasks._entity_updated_at({"created_at": "not-an-integer"}, fallback) == fallback
-    assert tasks._entity_updated_at({"created_at": 1787632259}, fallback) == datetime.fromtimestamp(
-        1787632259, UTC
+def test_provider_timestamp_falls_back_safely() -> None:
+    assert tasks._provider_timestamp({"created_at": "not-an-integer"}, "created_at") is None
+    assert tasks._provider_timestamp({"created_at": True}, "created_at") is None
+    assert tasks._provider_timestamp({"created_at": -1}, "created_at") is None
+    assert tasks._provider_timestamp({"created_at": 1787632259}, "created_at") == (
+        datetime.fromtimestamp(1787632259, UTC)
     )
 
 

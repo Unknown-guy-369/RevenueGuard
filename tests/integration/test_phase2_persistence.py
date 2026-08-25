@@ -16,11 +16,16 @@ from revenueguard_api.persistence import (
     DatabaseWebhookIngestionService,
 )
 from revenueguard_api.webhooks import IngestionDisposition, VerifiedRazorpayWebhook
+from revenueguard_domain import conservative_default_policy
 from revenueguard_integrations.persistence import (
     Base,
+    DecisionReceipt,
     EventDispatch,
     EventIngestionRepository,
     NormalizedEvent,
+    RecoveryCase,
+    RecoveryCaseEvent,
+    RecoveryRepository,
     WebhookEvent,
     create_session_factory,
 )
@@ -80,6 +85,11 @@ async def _create_merchant(
             merchant_id=merchant_id,
             display_name=f"Merchant {merchant_id}",
             provider_account_id=f"account_{merchant_id}",
+        )
+        await RecoveryRepository(session).publish_policy(
+            merchant_id=merchant_id,
+            policy=conservative_default_policy(),
+            published_by="TEST",
         )
 
 
@@ -324,6 +334,48 @@ async def test_provider_updates_do_not_regress_and_tenant_fks_are_enforced(
         assert stale.status == "CHARGED"
         assert stale.provider_updated_at == newer
 
+        equal_time_lower = await repository.upsert_subscription(
+            merchant_id="merchant_a",
+            subscription_id="subscription_001",
+            provider_subscription_id="sub_provider_001",
+            customer_id="customer_shared_name",
+            amount_minor=10000,
+            currency="INR",
+            status="PENDING",
+            provider_occurred_at=newer,
+            provider_updated_at=newer,
+        )
+        assert equal_time_lower.status == "CHARGED"
+        assert equal_time_lower.provider_updated_at == newer
+
+        payment = await repository.upsert_payment(
+            merchant_id="merchant_a",
+            payment_id="payment_001",
+            provider_payment_id="pay_provider_001",
+            customer_id="customer_shared_name",
+            order_id=None,
+            amount_minor=10000,
+            currency="INR",
+            status="CAPTURED",
+            provider_occurred_at=newer,
+            provider_updated_at=newer,
+        )
+        assert payment.status == "CAPTURED"
+        equal_time_failure = await repository.upsert_payment(
+            merchant_id="merchant_a",
+            payment_id="payment_001",
+            provider_payment_id="pay_provider_001",
+            customer_id="customer_shared_name",
+            order_id=None,
+            amount_minor=10000,
+            currency="INR",
+            status="FAILED",
+            provider_occurred_at=newer,
+            provider_updated_at=newer,
+        )
+        assert equal_time_failure.status == "CAPTURED"
+        assert equal_time_failure.provider_updated_at == newer
+
     async with session_factory() as session:
         repository = EventIngestionRepository(session)
         with pytest.raises(IntegrityError):
@@ -412,3 +464,6 @@ async def test_api_inbox_to_worker_normalization_is_idempotent(
         assert await session.scalar(select(func.count()).select_from(WebhookEvent)) == 1
         assert await session.scalar(select(func.count()).select_from(EventDispatch)) == 1
         assert await session.scalar(select(func.count()).select_from(NormalizedEvent)) == 1
+        assert await session.scalar(select(func.count()).select_from(RecoveryCase)) == 1
+        assert await session.scalar(select(func.count()).select_from(RecoveryCaseEvent)) == 1
+        assert await session.scalar(select(func.count()).select_from(DecisionReceipt)) == 1

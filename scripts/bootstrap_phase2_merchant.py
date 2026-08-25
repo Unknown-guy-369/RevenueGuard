@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create or update a non-secret merchant row for Test Mode webhook ingestion."""
+"""Configure a Test Mode merchant and its immutable conservative recovery policy."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ import argparse
 import asyncio
 
 from revenueguard_api.config import get_settings
+from revenueguard_domain import conservative_default_policy
 from revenueguard_integrations.persistence import (
     EventIngestionRepository,
+    RecoveryRepository,
     create_database_engine,
     create_session_factory,
     session_scope,
@@ -33,6 +35,11 @@ async def bootstrap(args: argparse.Namespace) -> None:
                 merchant_id=args.merchant_id,
                 display_name=args.display_name,
                 provider_account_id=args.provider_account_id,
+            )
+            await RecoveryRepository(session).publish_policy(
+                merchant_id=args.merchant_id,
+                policy=conservative_default_policy(),
+                published_by="BOOTSTRAP_SCRIPT",
             )
     finally:
         await engine.dispose()

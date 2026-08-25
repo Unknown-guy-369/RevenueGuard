@@ -1,4 +1,4 @@
-"""SQLAlchemy models for Phase 2 event ingestion and correlation.
+"""SQLAlchemy models for durable ingestion and recovery decisioning.
 
 All provider and workflow records are merchant scoped. PostgreSQL is authoritative;
 the models deliberately retain provider time separately from system receive/process time.
@@ -303,6 +303,409 @@ class EventCorrelation(Base):
             "reference_type",
             "external_id",
         ),
+    )
+
+
+class MerchantPolicyVersion(Base):
+    __tablename__ = "merchant_policy_versions"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[str] = mapped_column(String(128), primary_key=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    published_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        UniqueConstraint(
+            "merchant_id", "effective_at", name="uq_merchant_policy_versions_effective_at"
+        ),
+        UniqueConstraint(
+            "merchant_id", "version", "content_sha256", name="uq_policy_versions_identity_digest"
+        ),
+        CheckConstraint(
+            "content_sha256 ~ '^[0-9a-f]{64}$'", name="ck_policy_versions_content_sha256"
+        ),
+        Index(
+            "ix_merchant_policy_versions_effective",
+            "merchant_id",
+            "effective_at",
+        ),
+    )
+
+
+class RecoveryCase(TimestampColumns, Base):
+    __tablename__ = "recovery_cases"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
+    workflow_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    subject_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    customer_id: Mapped[str | None] = mapped_column(String(128))
+    revenue_at_risk_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    diagnosis: Mapped[str | None] = mapped_column(String(128))
+    diagnosis_confidence_basis_points: Mapped[int | None] = mapped_column(Integer)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    contact_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_incident_id: Mapped[str | None] = mapped_column(String(128))
+    next_evaluation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    terminal_reason: Mapped[str | None] = mapped_column(String(256))
+    recovery_episode_key: Mapped[str | None] = mapped_column(String(64))
+    latest_evidence_event_id: Mapped[str | None] = mapped_column(String(128))
+    latest_evidence_occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["merchant_id", "customer_id"],
+            ["customers.merchant_id", "customers.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "latest_evidence_event_id"],
+            ["normalized_events.merchant_id", "normalized_events.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "active_incident_id"],
+            ["portfolio_incidents.merchant_id", "portfolio_incidents.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("schema_version = '1.0'", name="ck_recovery_cases_schema_version"),
+        CheckConstraint(
+            "workflow_type IN ('FAILED_SUBSCRIPTION', 'PAYMENT_DEGRADATION', 'B2B_PROMISE_TO_PAY')",
+            name="ck_recovery_cases_workflow_type",
+        ),
+        CheckConstraint(
+            "subject_type IN ('PAYMENT', 'SUBSCRIPTION', 'INVOICE', 'PORTFOLIO_INCIDENT')",
+            name="ck_recovery_cases_subject_type",
+        ),
+        CheckConstraint(
+            "state IN ('DETECTED', 'DIAGNOSING', 'DECISION_PENDING', 'POLICY_CHECK', "
+            "'READY', 'EXECUTING', 'VERIFYING', 'UNKNOWN', 'DEFERRED', 'ESCALATED', "
+            "'RECOVERED', 'STOPPED')",
+            name="ck_recovery_cases_state",
+        ),
+        CheckConstraint("state_version >= 1", name="ck_recovery_cases_state_version"),
+        CheckConstraint("revenue_at_risk_minor >= 0", name="ck_recovery_cases_revenue_nonnegative"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_recovery_cases_currency_iso"),
+        CheckConstraint("retry_count >= 0", name="ck_recovery_cases_retry_nonnegative"),
+        CheckConstraint("contact_count >= 0", name="ck_recovery_cases_contact_nonnegative"),
+        CheckConstraint(
+            "diagnosis_confidence_basis_points IS NULL OR "
+            "diagnosis_confidence_basis_points BETWEEN 0 AND 10000",
+            name="ck_recovery_cases_diagnosis_confidence",
+        ),
+        CheckConstraint(
+            "(state IN ('RECOVERED', 'STOPPED') AND terminal_reason IS NOT NULL) OR "
+            "(state NOT IN ('RECOVERED', 'STOPPED') AND terminal_reason IS NULL)",
+            name="ck_recovery_cases_terminal_reason",
+        ),
+        CheckConstraint(
+            "recovery_episode_key IS NULL OR recovery_episode_key ~ '^[0-9a-f]{64}$'",
+            name="ck_recovery_cases_episode_key",
+        ),
+        Index(
+            "uq_recovery_cases_active_subject",
+            "merchant_id",
+            "workflow_type",
+            "subject_type",
+            "subject_id",
+            unique=True,
+            postgresql_where=text("state NOT IN ('RECOVERED', 'STOPPED')"),
+        ),
+        Index(
+            "uq_recovery_cases_episode",
+            "merchant_id",
+            "workflow_type",
+            "subject_type",
+            "subject_id",
+            "recovery_episode_key",
+            unique=True,
+            postgresql_where=text("recovery_episode_key IS NOT NULL"),
+        ),
+        Index(
+            "ix_recovery_cases_due",
+            "state",
+            "next_evaluation_at",
+            postgresql_where=text("state = 'DEFERRED'"),
+        ),
+        Index(
+            "ix_recovery_cases_merchant_occurred",
+            "merchant_id",
+            "latest_evidence_occurred_at",
+        ),
+    )
+
+
+class RecoveryCaseEvent(Base):
+    __tablename__ = "recovery_case_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    merchant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_case_id: Mapped[str | None] = mapped_column(String(128))
+    normalized_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    disposition: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "normalized_event_id"],
+            ["normalized_events.merchant_id", "normalized_events.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "merchant_id", "normalized_event_id", name="uq_recovery_case_events_event"
+        ),
+        CheckConstraint(
+            "disposition IN ('APPLIED', 'IGNORED_STALE', 'AUDIT_ONLY')",
+            name="ck_recovery_case_events_disposition",
+        ),
+        Index("ix_recovery_case_events_case", "merchant_id", "recovery_case_id", "created_at"),
+    )
+
+
+class CaseTransition(Base):
+    __tablename__ = "case_transitions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    merchant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    before_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    after_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    before_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    after_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason_detail: Mapped[str | None] = mapped_column(Text)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    authoritative_evidence_reference: Mapped[str | None] = mapped_column(String(512))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "policy_version"],
+            ["merchant_policy_versions.merchant_id", "merchant_policy_versions.version"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "merchant_id",
+            "recovery_case_id",
+            "after_version",
+            name="uq_case_transitions_case_version",
+        ),
+        CheckConstraint(
+            "after_version = before_version + 1", name="ck_case_transitions_version_increment"
+        ),
+        CheckConstraint(
+            "(before_state = 'DETECTED' AND after_state IN ('DIAGNOSING')) OR "
+            "(before_state = 'DIAGNOSING' AND after_state IN ('DECISION_PENDING')) OR "
+            "(before_state = 'DECISION_PENDING' AND after_state IN ('POLICY_CHECK')) OR "
+            "(before_state = 'POLICY_CHECK' AND after_state IN "
+            "('READY', 'DEFERRED', 'DECISION_PENDING', 'ESCALATED', 'STOPPED')) OR "
+            "(before_state = 'READY' AND after_state IN ('EXECUTING')) OR "
+            "(before_state = 'EXECUTING' AND after_state IN ('VERIFYING', 'UNKNOWN')) OR "
+            "(before_state = 'VERIFYING' AND after_state IN "
+            "('RECOVERED', 'DECISION_PENDING', 'STOPPED')) OR "
+            "(before_state = 'UNKNOWN' AND after_state IN ('VERIFYING', 'ESCALATED')) OR "
+            "(before_state = 'DEFERRED' AND after_state IN ('DECISION_PENDING')) OR "
+            "(before_state = 'ESCALATED' AND after_state IN ('DECISION_PENDING', 'STOPPED'))",
+            name="ck_case_transitions_allowed_edge",
+        ),
+        CheckConstraint(
+            "(after_state = 'RECOVERED' AND authoritative_evidence_reference IS NOT NULL) OR "
+            "(after_state <> 'RECOVERED')",
+            name="ck_case_transitions_recovered_evidence",
+        ),
+        Index("ix_case_transitions_case", "merchant_id", "recovery_case_id", "after_version"),
+    )
+
+
+class HumanReview(Base):
+    __tablename__ = "human_reviews"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    action_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    proposed_action_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_references: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    risk_detail: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reviewer_id: Mapped[str | None] = mapped_column(String(128))
+    rationale: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "policy_version"],
+            ["merchant_policy_versions.merchant_id", "merchant_policy_versions.version"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "action_fingerprint ~ '^[0-9a-f]{64}$' AND policy_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_human_reviews_digests",
+        ),
+        CheckConstraint(
+            "status IN ('REQUESTED', 'APPROVED', 'REJECTED', 'EXPIRED')",
+            name="ck_human_reviews_status",
+        ),
+        CheckConstraint("expires_at > requested_at", name="ck_human_reviews_expiry"),
+        CheckConstraint(
+            "decided_at IS NULL OR ("
+            "status IN ('APPROVED', 'REJECTED') AND decided_at >= requested_at "
+            "AND decided_at < expires_at) OR (status = 'EXPIRED' AND decided_at >= expires_at)",
+            name="ck_human_reviews_decision_chronology",
+        ),
+        CheckConstraint(
+            "(status = 'REQUESTED' AND reviewer_id IS NULL AND rationale IS NULL AND "
+            "decided_at IS NULL) OR (status <> 'REQUESTED' AND reviewer_id IS NOT NULL AND "
+            "rationale IS NOT NULL AND decided_at IS NOT NULL)",
+            name="ck_human_reviews_decision_metadata",
+        ),
+        Index("ix_human_reviews_case_status", "merchant_id", "recovery_case_id", "status"),
+    )
+
+
+class DecisionReceipt(Base):
+    __tablename__ = "decision_receipts"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    evidence_references: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    candidate_actions: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    selected_action_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_result: Mapped[str] = mapped_column(String(32), nullable=False)
+    policy_reason_codes: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    version_bundle: Mapped[dict[str, str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    human_review_id: Mapped[str | None] = mapped_column(String(128))
+    resulting_action_id: Mapped[str | None] = mapped_column(String(128))
+    resulting_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    audit_entry_id: Mapped[str | None] = mapped_column(String(128))
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "policy_version"],
+            ["merchant_policy_versions.merchant_id", "merchant_policy_versions.version"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "human_review_id"],
+            ["human_reviews.merchant_id", "human_reviews.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("schema_version = '1.0'", name="ck_decision_receipts_schema_version"),
+        CheckConstraint(
+            "policy_result IN ('PROCEED', 'DEFER', 'SKIP', 'STOP', 'REQUIRE_HUMAN')",
+            name="ck_decision_receipts_policy_result",
+        ),
+        CheckConstraint(
+            "resulting_state IN ('READY', 'DEFERRED', 'DECISION_PENDING', 'ESCALATED', 'STOPPED')",
+            name="ck_decision_receipts_resulting_state",
+        ),
+        Index("ix_decision_receipts_case", "merchant_id", "recovery_case_id", "created_at"),
+    )
+
+
+class CommunicationConsent(TimestampColumns, Base):
+    __tablename__ = "communication_consents"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    customer_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    channel: Mapped[str] = mapped_column(String(32), primary_key=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    opted_out: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "customer_id"],
+            ["customers.merchant_id", "customers.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "channel IN ('EMAIL', 'SMS', 'WHATSAPP')", name="ck_communication_consents_channel"
+        ),
+        CheckConstraint(
+            "state IN ('GRANTED', 'DENIED', 'UNKNOWN')", name="ck_communication_consents_state"
+        ),
+    )
+
+
+class PortfolioIncident(Base):
+    __tablename__ = "portfolio_incidents"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32), nullable=False)
+    channel: Mapped[str | None] = mapped_column(String(32))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        CheckConstraint(
+            "scope IN ('PAYMENT_RAIL', 'GATEWAY', 'ISSUER', 'CONTACT_CHANNEL', 'ALL_AUTOMATION')",
+            name="ck_portfolio_incidents_scope",
+        ),
+        CheckConstraint("status IN ('ACTIVE', 'RESOLVED')", name="ck_portfolio_incidents_status"),
+        CheckConstraint("ends_at > starts_at", name="ck_portfolio_incidents_window"),
+        CheckConstraint(
+            "(scope = 'CONTACT_CHANNEL' AND channel IN ('EMAIL', 'SMS', 'WHATSAPP')) OR "
+            "(scope <> 'CONTACT_CHANNEL' AND channel IS NULL)",
+            name="ck_portfolio_incidents_channel_scope",
+        ),
+        Index("ix_portfolio_incidents_active", "merchant_id", "starts_at", "ends_at"),
     )
 
 
