@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://revenueguard.local/contracts/v1/verified-outcome.schema.json",
+  "title": "VerifiedOutcome",
+  "description": "The reconciled outcome of an action, including explicit ambiguity and authoritative recovery accounting.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "outcome_id",
+    "action_id",
+    "case_id",
+    "merchant_id",
+    "outcome_status",
+    "is_authoritative",
+    "evidence_source",
+    "recovered_amount_minor",
+    "currency",
+    "observed_at",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "outcome_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "action_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "case_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "merchant_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "outcome_status": {"enum": ["PENDING", "SUCCEEDED", "FAILED", "UNKNOWN"]},
+    "is_authoritative": {"type": "boolean"},
+    "evidence_source": {"enum": ["SIGNED_WEBHOOK", "PROVIDER_LOOKUP", "PROVIDER_RESPONSE", "SIMULATOR", "NONE"]},
+    "evidence_reference": {"type": ["string", "null"], "minLength": 1, "maxLength": 512},
+    "provider_object_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "recovered_amount_minor": {"type": "integer", "minimum": 0},
+    "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "reason_code": {"type": ["string", "null"], "maxLength": 128},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "verified_at": {"type": ["string", "null"], "format": "date-time"},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"outcome_status": {"const": "UNKNOWN"}}, "required": ["outcome_status"]},
+      "then": {
+        "properties": {
+          "is_authoritative": {"const": false},
+          "recovered_amount_minor": {"const": 0},
+          "verified_at": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"recovered_amount_minor": {"minimum": 1}}, "required": ["recovered_amount_minor"]},
+      "then": {
+        "properties": {
+          "outcome_status": {"const": "SUCCEEDED"},
+          "is_authoritative": {"const": true}
+        },
+        "required": ["evidence_reference", "verified_at"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "initial_state": "DETECTED",
+  "terminal_states": [
+    "RECOVERED",
+    "STOPPED"
+  ],
+  "states": [
+    "DETECTED",
+    "DIAGNOSING",
+    "DECISION_PENDING",
+    "POLICY_CHECK",
+    "READY",
+    "EXECUTING",
+    "VERIFYING",
+    "UNKNOWN",
+    "DEFERRED",
+    "ESCALATED",
+    "RECOVERED",
+    "STOPPED"
+  ],
+  "transitions": {
+    "DETECTED": ["DIAGNOSING"],
+    "DIAGNOSING": ["DECISION_PENDING", "ESCALATED", "STOPPED"],
+    "DECISION_PENDING": ["POLICY_CHECK", "ESCALATED", "STOPPED"],
+    "POLICY_CHECK": ["READY", "DEFERRED", "DECISION_PENDING", "ESCALATED", "STOPPED"],
+    "READY": ["EXECUTING", "STOPPED"],
+    "EXECUTING": ["VERIFYING", "UNKNOWN"],
+    "VERIFYING": ["RECOVERED", "DECISION_PENDING", "UNKNOWN", "ESCALATED", "STOPPED"],
+    "UNKNOWN": ["VERIFYING", "ESCALATED"],
+    "DEFERRED": ["DECISION_PENDING", "STOPPED"],
+    "ESCALATED": ["DECISION_PENDING", "STOPPED"],
+    "RECOVERED": [],
+    "STOPPED": []
+  }
+}

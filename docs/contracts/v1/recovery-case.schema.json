@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://revenueguard.local/contracts/v1/recovery-case.schema.json",
+  "title": "RecoveryCase",
+  "description": "The durable universal case for one logical revenue recovery workflow.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case_id",
+    "merchant_id",
+    "workflow_type",
+    "subject_type",
+    "subject_id",
+    "revenue_at_risk_minor",
+    "currency",
+    "state",
+    "state_version",
+    "retry_count",
+    "contact_count",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "case_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "merchant_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "workflow_type": {"enum": ["FAILED_SUBSCRIPTION", "PAYMENT_DEGRADATION", "B2B_PROMISE_TO_PAY"]},
+    "subject_type": {"enum": ["PAYMENT", "SUBSCRIPTION", "INVOICE", "PORTFOLIO_INCIDENT"]},
+    "subject_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "customer_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "revenue_at_risk_minor": {"type": "integer", "minimum": 0},
+    "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "state": {
+      "enum": [
+        "DETECTED",
+        "DIAGNOSING",
+        "DECISION_PENDING",
+        "POLICY_CHECK",
+        "READY",
+        "EXECUTING",
+        "VERIFYING",
+        "UNKNOWN",
+        "DEFERRED",
+        "ESCALATED",
+        "RECOVERED",
+        "STOPPED"
+      ]
+    },
+    "state_version": {"type": "integer", "minimum": 1},
+    "diagnosis": {"type": ["string", "null"], "maxLength": 128},
+    "diagnosis_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "retry_count": {"type": "integer", "minimum": 0},
+    "contact_count": {"type": "integer", "minimum": 0},
+    "active_incident_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "next_evaluation_at": {"type": ["string", "null"], "format": "date-time"},
+    "terminal_reason": {"type": ["string", "null"], "maxLength": 256},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"enum": ["RECOVERED", "STOPPED"]}}, "required": ["state"]},
+      "then": {
+        "required": ["terminal_reason"],
+        "properties": {"terminal_reason": {"type": "string", "minLength": 1, "maxLength": 256}}
+      }
+    }
+  ]
+}

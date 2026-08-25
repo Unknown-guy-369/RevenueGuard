@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "outcome_id": "outcome_action_subscription_001_attempt_01",
+  "action_id": "action_subscription_001_attempt_01",
+  "case_id": "case_subscription_001",
+  "merchant_id": "merchant_demo_001",
+  "outcome_status": "SUCCEEDED",
+  "is_authoritative": true,
+  "evidence_source": "SIGNED_WEBHOOK",
+  "evidence_reference": "webhook_events/rzp_event_payment_link_paid_001",
+  "provider_object_id": "paylink_test_001",
+  "recovered_amount_minor": 499900,
+  "currency": "INR",
+  "reason_code": "PAYMENT_LINK_PAID",
+  "observed_at": "2026-08-25T16:40:00Z",
+  "verified_at": "2026-08-25T16:40:01Z",
+  "created_at": "2026-08-25T16:40:01Z"
+}

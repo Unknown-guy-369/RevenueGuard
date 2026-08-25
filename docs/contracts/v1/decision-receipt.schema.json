@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://revenueguard.local/contracts/v1/decision-receipt.schema.json",
+  "title": "DecisionReceipt",
+  "description": "A versioned explanation of recommendation, policy authorization, and resulting intent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "case_id",
+    "merchant_id",
+    "correlation_id",
+    "evidence_references",
+    "candidate_actions",
+    "selected_action_type",
+    "explanation",
+    "policy_result",
+    "policy_reason_codes",
+    "versions",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "receipt_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "case_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "merchant_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "correlation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "evidence_references": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 512}
+    },
+    "candidate_actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action_type", "recovery_probability", "expected_net_recovery_minor", "rank"],
+        "properties": {
+          "action_type": {"$ref": "#/$defs/actionType"},
+          "recovery_probability": {"type": "number", "minimum": 0, "maximum": 1},
+          "expected_net_recovery_minor": {"type": "integer"},
+          "rank": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "selected_action_type": {"$ref": "#/$defs/actionType"},
+    "explanation": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "policy_result": {"enum": ["PROCEED", "DEFER", "SKIP", "STOP", "REQUIRE_HUMAN"]},
+    "policy_reason_codes": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "model", "prompt", "schema", "features", "application"],
+      "properties": {
+        "policy": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "prompt": {"type": "string", "minLength": 1},
+        "schema": {"const": "1.0"},
+        "features": {"type": "string", "minLength": 1},
+        "application": {"type": "string", "minLength": 1}
+      }
+    },
+    "human_review_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "resulting_action_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "resulting_state": {
+      "enum": [
+        "DETECTED",
+        "DIAGNOSING",
+        "DECISION_PENDING",
+        "POLICY_CHECK",
+        "READY",
+        "EXECUTING",
+        "VERIFYING",
+        "UNKNOWN",
+        "DEFERRED",
+        "ESCALATED",
+        "RECOVERED",
+        "STOPPED"
+      ]
+    },
+    "audit_entry_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "actionType": {
+      "enum": [
+        "DEFER_RETRY",
+        "CREATE_PAYMENT_LINK",
+        "REQUEST_PAYMENT_METHOD_UPDATE",
+        "SEND_REMINDER",
+        "SCHEDULE_PROMISE_REMINDER",
+        "PAUSE_RETRIES",
+        "RESUME_DEFERRED_CASE",
+        "ESCALATE_HUMAN",
+        "STOP_AUTOMATION",
+        "NO_ACTION"
+      ]
+    }
+  }
+}

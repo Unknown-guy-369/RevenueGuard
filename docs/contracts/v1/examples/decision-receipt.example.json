@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "receipt_id": "decision_case_subscription_001_v1",
+  "case_id": "case_subscription_001",
+  "merchant_id": "merchant_demo_001",
+  "correlation_id": "corr_subscription_001_attempt_01",
+  "evidence_references": [
+    "webhook_events/rzp_event_subscription_pending_001",
+    "recovery_cases/case_subscription_001/state/4"
+  ],
+  "candidate_actions": [
+    {
+      "action_type": "DEFER_RETRY",
+      "recovery_probability": 0.68,
+      "expected_net_recovery_minor": 332000,
+      "rank": 1
+    },
+    {
+      "action_type": "CREATE_PAYMENT_LINK",
+      "recovery_probability": 0.43,
+      "expected_net_recovery_minor": 207000,
+      "rank": 2
+    }
+  ],
+  "selected_action_type": "DEFER_RETRY",
+  "explanation": "Insufficient funds is likely temporary and a delayed attempt has higher expected net recovery than immediate contact.",
+  "policy_result": "DEFER",
+  "policy_reason_codes": ["INSUFFICIENT_FUNDS_DELAY_WINDOW"],
+  "versions": {
+    "policy": "merchant-demo-policy-v1",
+    "model": "calibrated-logistic-v0",
+    "prompt": "case-planner-v1",
+    "schema": "1.0",
+    "features": "recovery-features-v1",
+    "application": "phase-0-contract"
+  },
+  "human_review_id": null,
+  "resulting_action_id": null,
+  "resulting_state": "DEFERRED",
+  "audit_entry_id": "audit_decision_001",
+  "created_at": "2026-08-25T04:31:03Z"
+}

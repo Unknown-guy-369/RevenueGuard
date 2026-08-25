@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://revenueguard.local/contracts/v1/recovery-action.schema.json",
+  "title": "RecoveryAction",
+  "description": "A policy-authorized, idempotent command for deterministic execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "action_id",
+    "case_id",
+    "merchant_id",
+    "decision_receipt_id",
+    "action_type",
+    "target_type",
+    "target_id",
+    "logical_attempt",
+    "idempotency_key",
+    "status",
+    "authorized_at",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "action_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "case_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "merchant_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "decision_receipt_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "action_type": {
+      "enum": [
+        "DEFER_RETRY",
+        "CREATE_PAYMENT_LINK",
+        "REQUEST_PAYMENT_METHOD_UPDATE",
+        "SEND_REMINDER",
+        "SCHEDULE_PROMISE_REMINDER",
+        "PAUSE_RETRIES",
+        "RESUME_DEFERRED_CASE",
+        "ESCALATE_HUMAN",
+        "STOP_AUTOMATION",
+        "NO_ACTION"
+      ]
+    },
+    "target_type": {"enum": ["PAYMENT", "SUBSCRIPTION", "INVOICE", "CUSTOMER", "PORTFOLIO_INCIDENT", "CASE"]},
+    "target_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "logical_attempt": {"type": "integer", "minimum": 1},
+    "idempotency_key": {"type": "string", "minLength": 16, "maxLength": 256},
+    "status": {"enum": ["PENDING", "SUCCEEDED", "FAILED", "UNKNOWN"]},
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {"type": "integer", "minimum": 0},
+        "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+        "provider_mode": {"const": "TEST"},
+        "channel": {"enum": ["SIMULATED_EMAIL", "SIMULATED_SMS", "TEST_WHATSAPP"]},
+        "message_template_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "scheduled_for": {"type": "string", "format": "date-time"},
+        "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
+      }
+    },
+    "authorized_at": {"type": "string", "format": "date-time"},
+    "execute_after": {"type": ["string", "null"], "format": "date-time"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": ["string", "null"], "format": "date-time"}
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "case_id": "case_subscription_001",
+  "merchant_id": "merchant_demo_001",
+  "workflow_type": "FAILED_SUBSCRIPTION",
+  "subject_type": "SUBSCRIPTION",
+  "subject_id": "subscription_001",
+  "customer_id": "customer_001",
+  "revenue_at_risk_minor": 499900,
+  "currency": "INR",
+  "state": "DEFERRED",
+  "state_version": 5,
+  "diagnosis": "INSUFFICIENT_FUNDS",
+  "diagnosis_confidence": 0.91,
+  "retry_count": 0,
+  "contact_count": 0,
+  "active_incident_id": null,
+  "next_evaluation_at": "2026-08-25T16:31:00Z",
+  "terminal_reason": null,
+  "created_at": "2026-08-25T04:31:01Z",
+  "updated_at": "2026-08-25T04:31:03Z"
+}

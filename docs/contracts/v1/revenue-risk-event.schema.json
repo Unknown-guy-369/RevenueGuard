@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://revenueguard.local/contracts/v1/revenue-risk-event.schema.json",
+  "title": "RevenueRiskEvent",
+  "description": "A normalized provider or merchant event that may create or update a recovery case.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "merchant_id",
+    "source",
+    "source_event_id",
+    "event_type",
+    "occurred_at",
+    "received_at",
+    "amount_minor",
+    "currency",
+    "normalized_failure_category",
+    "correlation_id",
+    "source_payload_reference"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "event_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "merchant_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "source": {"enum": ["RAZORPAY", "MERCHANT", "SYNTHETIC"]},
+    "source_event_id": {"type": "string", "minLength": 1, "maxLength": 256},
+    "event_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "received_at": {"type": "string", "format": "date-time"},
+    "customer_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "payment_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "order_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "subscription_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "invoice_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "payment_link_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "amount_minor": {"type": "integer", "minimum": 0},
+    "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+    "failure_code": {"type": ["string", "null"], "maxLength": 128},
+    "normalized_failure_category": {
+      "enum": [
+        "NONE",
+        "INSUFFICIENT_FUNDS",
+        "EXPIRED_PAYMENT_METHOD",
+        "AUTHENTICATION_FAILURE",
+        "ISSUER_UNAVAILABLE",
+        "GATEWAY_UNAVAILABLE",
+        "CUSTOMER_ACTION_REQUIRED",
+        "DISPUTE",
+        "UNKNOWN"
+      ]
+    },
+    "correlation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "causation_id": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "source_payload_reference": {"type": "string", "minLength": 1, "maxLength": 512}
+  },
+  "anyOf": [
+    {"required": ["payment_id"], "properties": {"payment_id": {"type": "string"}}},
+    {"required": ["subscription_id"], "properties": {"subscription_id": {"type": "string"}}},
+    {"required": ["invoice_id"], "properties": {"invoice_id": {"type": "string"}}},
+    {"required": ["payment_link_id"], "properties": {"payment_link_id": {"type": "string"}}},
+    {"required": ["customer_id"], "properties": {"customer_id": {"type": "string"}}}
+  ]
+}
