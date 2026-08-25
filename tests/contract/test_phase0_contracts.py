@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import copy
 import json
 import re
 import unittest
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = ROOT / "docs" / "contracts" / "v1"
@@ -75,7 +73,9 @@ def validate_json_schema_subset(
     path: str = "$",
 ) -> None:
     if "$ref" in schema:
-        validate_json_schema_subset(value, resolve_ref(root_schema, schema["$ref"]), root_schema, path)
+        validate_json_schema_subset(
+            value, resolve_ref(root_schema, schema["$ref"]), root_schema, path
+        )
         return
 
     if "const" in schema and value != schema["const"]:
@@ -287,7 +287,12 @@ class PhaseZeroContractTests(unittest.TestCase):
 
     def test_retired_project_name_is_absent(self) -> None:
         retired_name = "Recovery" + "OS"
-        checked_roots = [ROOT / "AGENTS.md", ROOT / "ARCHITECTURE.md", ROOT / "IMPLEMENTATION_PLAN.md", ROOT / "docs"]
+        checked_roots = [
+            ROOT / "AGENTS.md",
+            ROOT / "ARCHITECTURE.md",
+            ROOT / "IMPLEMENTATION_PLAN.md",
+            ROOT / "docs",
+        ]
         for checked_root in checked_roots:
             paths = [checked_root] if checked_root.is_file() else checked_root.rglob("*")
             for path in paths:

@@ -1,0 +1,22 @@
+{
+  "name": "revenueguard",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @revenueguard/web",
+    "format:web": "npm run format --workspace @revenueguard/web",
+    "format:check:web": "npm run format:check --workspace @revenueguard/web",
+    "lint:web": "npm run lint --workspace @revenueguard/web",
+    "typecheck:web": "npm run typecheck --workspace @revenueguard/web",
+    "test:web": "npm run test --workspace @revenueguard/web",
+    "build:web": "npm run build --workspace @revenueguard/web",
+    "check:web": "npm run check --workspace @revenueguard/web"
+  }
+}

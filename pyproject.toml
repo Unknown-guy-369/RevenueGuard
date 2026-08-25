@@ -1,0 +1,83 @@
+[project]
+name = "revenueguard"
+version = "0.1.0"
+description = "Unified agentic revenue recovery control plane"
+readme = "README.md"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+  "revenueguard-agents",
+  "revenueguard-api",
+  "revenueguard-domain",
+  "revenueguard-evaluation",
+  "revenueguard-integrations",
+  "revenueguard-observability",
+  "revenueguard-worker",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.28",
+  "mypy>=1.18",
+  "pytest>=8.4",
+  "pytest-asyncio>=1.2",
+  "ruff>=0.14",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+  "apps/api",
+  "apps/worker",
+  "packages/agents",
+  "packages/domain",
+  "packages/evaluation",
+  "packages/integrations",
+  "packages/observability",
+]
+
+[tool.uv.sources]
+revenueguard-agents = { workspace = true }
+revenueguard-api = { workspace = true }
+revenueguard-domain = { workspace = true }
+revenueguard-evaluation = { workspace = true }
+revenueguard-integrations = { workspace = true }
+revenueguard-observability = { workspace = true }
+revenueguard-worker = { workspace = true }
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests", "apps"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+pretty = true
+show_error_codes = true
+packages = [
+  "revenueguard_agents",
+  "revenueguard_api",
+  "revenueguard_domain",
+  "revenueguard_evaluation",
+  "revenueguard_integrations",
+  "revenueguard_observability",
+  "revenueguard_worker",
+]
+
+[[tool.mypy.overrides]]
+module = ["celery.*"]
+ignore_missing_imports = true

@@ -1,0 +1,37 @@
+name: revenueguard
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: revenueguard
+      POSTGRES_USER: revenueguard
+      POSTGRES_PASSWORD: revenueguard
+    ports:
+      - "5432:5432"
+    volumes:
+      - revenueguard_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revenueguard -d revenueguard"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - revenueguard_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  revenueguard_postgres:
+  revenueguard_redis:
