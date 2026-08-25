@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "subscription.pending",
+  "contains": ["subscription", "payment"],
+  "payload": {
+    "subscription": {
+      "entity": {
+        "id": "sub_fixture_001",
+        "entity": "subscription",
+        "customer_id": "customer_fixture_001",
+        "status": "pending",
+        "created_at": 1787630000
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_fixture_subscription_001",
+        "entity": "payment",
+        "amount": 499900,
+        "currency": "INR",
+        "status": "failed",
+        "customer_id": "customer_fixture_001",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "The saved card has expired.",
+        "error_reason": "expired_card",
+        "created_at": 1787632499
+      }
+    }
+  },
+  "created_at": 1787632500
+}

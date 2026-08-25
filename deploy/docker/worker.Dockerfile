@@ -20,4 +20,4 @@ RUN uv sync --frozen --no-dev --package revenueguard-worker
 RUN useradd --create-home --uid 10001 revenueguard
 USER revenueguard
 
-CMD ["uv", "run", "--no-sync", "celery", "-A", "revenueguard_worker.celery_app:celery_app", "worker", "--loglevel=INFO"]
+CMD ["uv", "run", "--no-sync", "celery", "-A", "revenueguard_worker.celery_app:celery_app", "worker", "--beat", "--queues=celery,event_dispatch,event_ingestion", "--schedule=/tmp/celerybeat-schedule", "--loglevel=INFO"]

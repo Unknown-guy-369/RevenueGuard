@@ -10,6 +10,7 @@ dependencies = [
   "pydantic-settings>=2.11",
   "redis>=6.4,<6.5",
   "revenueguard-domain",
+  "revenueguard-integrations",
   "revenueguard-observability",
   "sqlalchemy[asyncio]>=2.0.44",
   "uvicorn[standard]>=0.38",
@@ -24,4 +25,5 @@ packages = ["src/revenueguard_api"]
 
 [tool.uv.sources]
 revenueguard-domain = { workspace = true }
+revenueguard-integrations = { workspace = true }
 revenueguard-observability = { workspace = true }

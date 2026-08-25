@@ -1076,6 +1076,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "redis" },
     { name = "revenueguard-domain" },
+    { name = "revenueguard-integrations" },
     { name = "revenueguard-observability" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
@@ -1089,6 +1090,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.11" },
     { name = "redis", specifier = ">=6.4,<6.5" },
     { name = "revenueguard-domain", editable = "packages/domain" },
+    { name = "revenueguard-integrations", editable = "packages/integrations" },
     { name = "revenueguard-observability", editable = "packages/observability" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.38" },
@@ -1115,11 +1117,17 @@ name = "revenueguard-integrations"
 version = "0.1.0"
 source = { editable = "packages/integrations" }
 dependencies = [
+    { name = "asyncpg" },
     { name = "revenueguard-domain" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "revenueguard-domain", editable = "packages/domain" }]
+requires-dist = [
+    { name = "asyncpg", specifier = ">=0.31" },
+    { name = "revenueguard-domain", editable = "packages/domain" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44" },
+]
 
 [[package]]
 name = "revenueguard-observability"
@@ -1143,6 +1151,7 @@ dependencies = [
     { name = "revenueguard-domain" },
     { name = "revenueguard-integrations" },
     { name = "revenueguard-observability" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
 [package.metadata]
@@ -1153,6 +1162,7 @@ requires-dist = [
     { name = "revenueguard-domain", editable = "packages/domain" },
     { name = "revenueguard-integrations", editable = "packages/integrations" },
     { name = "revenueguard-observability", editable = "packages/observability" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44" },
 ]
 
 [[package]]

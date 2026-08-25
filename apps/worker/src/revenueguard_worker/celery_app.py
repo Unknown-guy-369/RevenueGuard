@@ -23,4 +23,14 @@ celery_app.conf.update(
     task_serializer="json",
     timezone="UTC",
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "dispatch-durable-webhook-events": {
+            "task": "revenueguard.events.dispatch_pending",
+            "schedule": 5.0,
+        }
+    },
+    task_routes={
+        "revenueguard.events.dispatch_pending": {"queue": "event_dispatch"},
+        "revenueguard.events.process": {"queue": "event_ingestion"},
+    },
 )

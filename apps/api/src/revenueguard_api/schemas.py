@@ -1,4 +1,4 @@
-"""System endpoint response contracts."""
+"""API response contracts."""
 
 from typing import Literal
 
@@ -32,3 +32,8 @@ class ReadinessResponse(StrictResponse):
     status: Literal["ready", "not_ready"]
     service: str
     dependencies: DependencyStatus
+
+
+class WebhookReceipt(StrictResponse):
+    status: Literal["accepted", "duplicate"]
+    provider_event_id: str

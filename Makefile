@@ -3,7 +3,7 @@
 UV_CACHE_DIR ?= $(CURDIR)/.runtime/uv-cache
 export UV_CACHE_DIR
 
-.PHONY: help setup env infra-up infra-down infra-status migrate api worker web format format-check lint typecheck test build check phase0-test clean
+.PHONY: help setup env infra-up infra-down infra-status migrate bootstrap-merchant api worker web format format-check lint typecheck test build check phase0-test replay-webhooks requeue-dead-letter clean
 
 help:
 	@echo "RevenueGuard development commands"
@@ -11,9 +11,12 @@ help:
 	@echo "  make env           Create .env from .env.example if absent"
 	@echo "  make infra-up      Start PostgreSQL and Redis"
 	@echo "  make migrate       Apply Alembic migrations"
+	@echo "  make bootstrap-merchant MERCHANT_ID=..."
 	@echo "  make api           Run FastAPI with reload"
 	@echo "  make worker        Run the Celery worker"
 	@echo "  make web           Run the Next.js dashboard"
+	@echo "  make replay-webhooks MODE=normal MERCHANT_ID=... FIXTURES='...'"
+	@echo "  make requeue-dead-letter DISPATCH_ID=... ACTOR=..."
 	@echo "  make check         Run all formatting, lint, type, test, and build checks"
 
 setup:
@@ -35,11 +38,15 @@ infra-status:
 migrate:
 	uv run alembic upgrade head
 
+bootstrap-merchant:
+	@test -n "$(MERCHANT_ID)" || (echo "MERCHANT_ID is required" >&2; exit 2)
+	uv run python scripts/bootstrap_phase2_merchant.py --merchant-id "$(MERCHANT_ID)"
+
 api:
 	uv run uvicorn revenueguard_api.main:app --host 0.0.0.0 --port 8000 --reload
 
 worker:
-	uv run celery -A revenueguard_worker.celery_app:celery_app worker --loglevel=INFO
+	uv run celery -A revenueguard_worker.celery_app:celery_app worker --beat --queues=celery,event_dispatch,event_ingestion --loglevel=INFO
 
 web:
 	npm run dev:web
@@ -71,6 +78,16 @@ build:
 
 phase0-test:
 	PYTHONDONTWRITEBYTECODE=1 uv run python -m unittest tests.contract.test_phase0_contracts
+
+replay-webhooks:
+	@test -n "$(MERCHANT_ID)" || (echo "MERCHANT_ID is required" >&2; exit 2)
+	@test -n "$(FIXTURES)" || (echo "FIXTURES is required" >&2; exit 2)
+	uv run python scripts/replay_webhooks.py $(or $(MODE),normal) --merchant-id "$(MERCHANT_ID)" $(FIXTURES)
+
+requeue-dead-letter:
+	@test -n "$(DISPATCH_ID)" || (echo "DISPATCH_ID is required" >&2; exit 2)
+	@test -n "$(ACTOR)" || (echo "ACTOR is required" >&2; exit 2)
+	uv run python scripts/requeue_dead_letter.py "$(DISPATCH_ID)" --actor "$(ACTOR)"
 
 check: format-check lint typecheck test build
 

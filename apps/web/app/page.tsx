@@ -51,8 +51,8 @@ const architectureCards = [
 const dependencyRows = [
   ["PostgreSQL", "Authoritative financial and workflow state", "Required"],
   ["Redis", "Queue, cache, rate limits, and coordination only", "Required"],
-  ["Razorpay", "Test Mode provider boundary", "Disabled in Phase 1"],
-  ["LLM", "Read-only bounded reasoning", "Disabled in Phase 1"],
+  ["Razorpay", "Signed Test Mode webhook ingestion", "Enabled in Phase 2"],
+  ["LLM", "Read-only bounded reasoning", "Disabled until Phase 5"],
 ] as const;
 
 export default function Home() {
@@ -119,8 +119,9 @@ export default function Home() {
             <span className="badge">SYSTEM FOUNDATION</span>
             <h2 id="system-title">Runtime pieces, without pretend outcomes.</h2>
             <p>
-              Phase 1 proves the repository, services, quality gates, and dependency wiring.
-              Recovery workflows begin only after persistence and policy are implemented.
+              Phase 2 adds authenticated event ingestion, durable deduplication, and safe
+              asynchronous normalization. Recovery workflows begin only after persistence and policy
+              are implemented.
             </p>
           </div>
           <div className="card-grid">
@@ -192,7 +193,7 @@ export default function Home() {
           </a>
           <p>Bounded recovery. Verified outcomes.</p>
         </div>
-        <p>Phase 1 scaffold · No live money movement</p>
+        <p>Phase 2 event control plane · No live money movement</p>
       </footer>
     </main>
   );

@@ -10,6 +10,7 @@ dependencies = [
   "revenueguard-domain",
   "revenueguard-integrations",
   "revenueguard-observability",
+  "sqlalchemy[asyncio]>=2.0.44",
 ]
 
 [build-system]

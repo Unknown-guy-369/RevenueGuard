@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "payment_link.paid",
+  "contains": ["payment_link", "payment"],
+  "payload": {
+    "payment_link": {
+      "entity": {
+        "id": "plink_fixture_001",
+        "entity": "payment_link",
+        "amount": 1250000,
+        "currency": "INR",
+        "customer_id": "customer_fixture_002",
+        "status": "paid",
+        "created_at": 1787631000
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_fixture_link_001",
+        "entity": "payment",
+        "amount": 1250000,
+        "currency": "INR",
+        "status": "captured",
+        "order_id": "order_fixture_002",
+        "customer_id": "customer_fixture_002",
+        "created_at": 1787633099
+      }
+    }
+  },
+  "created_at": 1787633100
+}

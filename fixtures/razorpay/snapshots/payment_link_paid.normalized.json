@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "event_id": "evt_internal_payment_link_paid_001",
+  "merchant_id": "merchant_fixture_001",
+  "source": "SYNTHETIC",
+  "source_event_id": "rzp_evt_synthetic_payment_link_paid_001",
+  "event_type": "payment_link.paid",
+  "occurred_at": "2026-08-25T04:45:00Z",
+  "received_at": "2026-08-25T04:45:01Z",
+  "customer_id": "customer_fixture_002",
+  "payment_id": "pay_fixture_link_001",
+  "order_id": "order_fixture_002",
+  "subscription_id": null,
+  "invoice_id": null,
+  "payment_link_id": "plink_fixture_001",
+  "amount_minor": 1250000,
+  "currency": "INR",
+  "failure_code": null,
+  "normalized_failure_category": "NONE",
+  "correlation_id": "corr_payment_link_fixture_001",
+  "causation_id": null,
+  "source_payload_reference": "webhook_events/rzp_evt_synthetic_payment_link_paid_001"
+}

@@ -1,0 +1,51 @@
+{
+  "classification": "SYNTHETIC",
+  "schema_version": "1.0",
+  "disclaimer": "Sanitized Razorpay-shaped fixtures for protocol and normalization tests only; not production merchant events or results.",
+  "fixtures": [
+    {
+      "payload": "payment_failed.json",
+      "snapshot": "snapshots/payment_failed.normalized.json",
+      "provider_event_id": "rzp_evt_synthetic_payment_failed_001",
+      "event_id": "evt_internal_payment_failed_001",
+      "merchant_id": "merchant_fixture_001",
+      "received_at": "2026-08-25T04:31:01Z",
+      "correlation_id": "corr_payment_fixture_001",
+      "causation_id": null,
+      "source_payload_reference": "webhook_events/rzp_evt_synthetic_payment_failed_001"
+    },
+    {
+      "payload": "subscription_pending.json",
+      "snapshot": "snapshots/subscription_pending.normalized.json",
+      "provider_event_id": "rzp_evt_synthetic_subscription_pending_001",
+      "event_id": "evt_internal_subscription_pending_001",
+      "merchant_id": "merchant_fixture_001",
+      "received_at": "2026-08-25T04:35:01Z",
+      "correlation_id": "corr_subscription_fixture_001",
+      "causation_id": "evt_internal_payment_failed_001",
+      "source_payload_reference": "webhook_events/rzp_evt_synthetic_subscription_pending_001"
+    },
+    {
+      "payload": "subscription_halted.json",
+      "snapshot": "snapshots/subscription_halted.normalized.json",
+      "provider_event_id": "rzp_evt_synthetic_subscription_halted_001",
+      "event_id": "evt_internal_subscription_halted_001",
+      "merchant_id": "merchant_fixture_001",
+      "received_at": "2026-08-25T04:40:01Z",
+      "correlation_id": "corr_subscription_fixture_001",
+      "causation_id": "evt_internal_subscription_pending_001",
+      "source_payload_reference": "webhook_events/rzp_evt_synthetic_subscription_halted_001"
+    },
+    {
+      "payload": "payment_link_paid.json",
+      "snapshot": "snapshots/payment_link_paid.normalized.json",
+      "provider_event_id": "rzp_evt_synthetic_payment_link_paid_001",
+      "event_id": "evt_internal_payment_link_paid_001",
+      "merchant_id": "merchant_fixture_001",
+      "received_at": "2026-08-25T04:45:01Z",
+      "correlation_id": "corr_payment_link_fixture_001",
+      "causation_id": null,
+      "source_payload_reference": "webhook_events/rzp_evt_synthetic_payment_link_paid_001"
+    }
+  ]
+}

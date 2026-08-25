@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "event_id": "evt_internal_subscription_pending_001",
+  "merchant_id": "merchant_fixture_001",
+  "source": "SYNTHETIC",
+  "source_event_id": "rzp_evt_synthetic_subscription_pending_001",
+  "event_type": "subscription.pending",
+  "occurred_at": "2026-08-25T04:35:00Z",
+  "received_at": "2026-08-25T04:35:01Z",
+  "customer_id": "customer_fixture_001",
+  "payment_id": "pay_fixture_subscription_001",
+  "order_id": null,
+  "subscription_id": "sub_fixture_001",
+  "invoice_id": null,
+  "payment_link_id": null,
+  "amount_minor": 499900,
+  "currency": "INR",
+  "failure_code": "BAD_REQUEST_ERROR",
+  "normalized_failure_category": "EXPIRED_PAYMENT_METHOD",
+  "correlation_id": "corr_subscription_fixture_001",
+  "causation_id": "evt_internal_payment_failed_001",
+  "source_payload_reference": "webhook_events/rzp_evt_synthetic_subscription_pending_001"
+}

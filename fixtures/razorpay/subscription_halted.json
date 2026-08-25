@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "subscription.halted",
+  "contains": ["subscription", "payment"],
+  "payload": {
+    "subscription": {
+      "entity": {
+        "id": "sub_fixture_001",
+        "entity": "subscription",
+        "customer_id": "customer_fixture_001",
+        "status": "halted",
+        "created_at": 1787630000
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_fixture_subscription_002",
+        "entity": "payment",
+        "amount": 499900,
+        "currency": "INR",
+        "status": "failed",
+        "customer_id": "customer_fixture_001",
+        "error_code": "SERVER_ERROR",
+        "error_description": "The issuer was temporarily unavailable.",
+        "error_reason": "issuer_unavailable",
+        "created_at": 1787632799
+      }
+    }
+  },
+  "created_at": 1787632800
+}

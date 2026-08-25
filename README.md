@@ -2,7 +2,7 @@
 
 RevenueGuard is a bounded, event-driven revenue recovery control plane for Razorpay merchants. It is designed to detect revenue at risk, coordinate safe recovery decisions, apply deterministic merchant policy, execute approved actions idempotently, and count recovered money only after authoritative verification.
 
-> **Current status — Phase 1:** the reproducible application scaffold is implemented. The API, worker, dashboard, database migrations, local infrastructure, containers, CI, and quality gates are available. Webhook ingestion and live recovery workflows begin in later phases. No live payment or customer-contact action is enabled.
+> **Current status — Phase 2:** authenticated Razorpay webhook ingestion, the durable event inbox, normalized event persistence, recoverable asynchronous dispatch, and replay tooling are implemented on top of the Phase 1 scaffold. No payment, customer-contact, recovery-action, or recovered-revenue path is enabled.
 
 ## Safety model
 
@@ -42,20 +42,20 @@ flowchart LR
     Verify --> Case
 ```
 
-Phase 1 establishes the service boundaries and dependency wiring without pretending that later-phase recovery behavior exists.
+Phase 2 accepts authenticated Test Mode events into PostgreSQL and normalizes them asynchronously without pretending that later recovery behavior exists.
 
-## Phase 1 capabilities
+## Phase 2 capabilities
 
 | Area     | Implemented                                                                                                     |
 | -------- | --------------------------------------------------------------------------------------------------------------- |
-| API      | FastAPI application with typed liveness, readiness, and version responses                                       |
-| Worker   | Celery/Redis worker with JSON-only messages, late acknowledgement, worker-loss rejection, and a diagnostic task |
+| API      | Raw-body Razorpay HMAC verification, tenant resolution, durable acceptance/deduplication, and system endpoints   |
+| Worker   | Recoverable PostgreSQL-to-Celery dispatch, idempotent normalization, bounded retry, and dead-letter retention    |
 | Web      | Responsive Next.js operational dashboard based on the Coinbase design reference                                 |
-| Database | PostgreSQL local dependency and Alembic baseline migration                                                      |
-| Domain   | Framework-independent packages and versioned Phase 0 contracts                                                  |
+| Database | Merchant-scoped inbox, normalized events, correlations, provider entities, and dispatch state via Alembic       |
+| Domain   | Framework-independent typed `RevenueRiskEvent` and versioned Phase 0 contracts                                  |
 | Quality  | Ruff, mypy, pytest, ESLint, TypeScript, Vitest, Prettier, and production build gates                            |
-| Delivery | Dockerfiles, Docker Compose, locked dependencies, Make targets, and GitHub Actions CI                           |
-| Safety   | Blank tracked secret template and an explicit no-direct-agent-action boundary                                   |
+| Delivery | Six-mode webhook replay CLI plus the existing containers, locked dependencies, Make targets, and CI            |
+| Safety   | Invalid signatures never normalize; duplicate delivery creates one logical event; external actions stay absent   |
 
 ## Technology stack
 
@@ -111,6 +111,7 @@ make env
 make setup
 make infra-up
 make migrate
+make bootstrap-merchant MERCHANT_ID=merchant_demo_001
 ```
 
 `make env` creates `.env` from `.env.example` only when `.env` does not already exist. Keep real credentials in the ignored `.env` file or a secret manager—never in `.env.example`.
@@ -186,6 +187,23 @@ Expected result:
 {'status': 'ok', 'service': 'revenueguard-worker'}
 ```
 
+Replay sanitized webhook fixtures after configuring a Test Mode merchant and exporting its webhook secret in the current shell:
+
+```bash
+export RAZORPAY_WEBHOOK_SECRET='your-test-mode-webhook-secret'
+make replay-webhooks MODE=duplicate \
+  MERCHANT_ID=merchant_demo_001 \
+  FIXTURES='fixtures/razorpay/payment_failed.json'
+```
+
+Available modes are `normal`, `duplicate`, `invalid-signature`, `delayed`, `burst`, and `out-of-order`. The CLI derives stable provider event IDs from fixture bytes, signs those exact bytes, and returns a nonzero status when delivery expectations fail.
+
+Dead-letter rows remain visible in PostgreSQL. An operator can requeue one explicitly while preserving replay count, time, and actor:
+
+```bash
+make requeue-dead-letter DISPATCH_ID='<uuid>' ACTOR='operator@example'
+```
+
 Confirm readiness fails honestly when a required dependency is unavailable:
 
 ```bash
@@ -233,7 +251,7 @@ Razorpay, webhook, LLM, and contact-provider credentials must remain untracked. 
 
 1. **Completed:** product contracts and safety decisions.
 2. **Completed:** reproducible repository and service scaffold.
-3. Transactional webhook ingestion, event inbox, normalization, and core persistence.
+3. **Completed:** transactional webhook ingestion, event inbox, normalization, and core persistence.
 4. Recovery case state machine and deterministic merchant policy.
 5. Idempotent outbox, provider execution, and outcome reconciliation.
 6. Bounded case intelligence and the three core recovery playbooks.
