@@ -97,7 +97,7 @@ class CandidateAction:
     expected_net_recovery_minor: int
     rank: int
     target: str
-    logical_attempt: int = 0
+    logical_attempt: int = 1
     channel: ContactChannel | None = None
 
     def __post_init__(self) -> None:
@@ -106,7 +106,7 @@ class CandidateAction:
         for name, value, minimum in (
             ("recovery_probability_basis_points", self.recovery_probability_basis_points, 0),
             ("rank", self.rank, 1),
-            ("logical_attempt", self.logical_attempt, 0),
+            ("logical_attempt", self.logical_attempt, 1),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")

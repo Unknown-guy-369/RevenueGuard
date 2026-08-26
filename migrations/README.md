@@ -8,4 +8,4 @@ uv run alembic current
 uv run alembic history
 ```
 
-Phase 1 contains an empty baseline revision that proves migration wiring. Phase 2 will introduce the transactional event inbox and initial domain tables.
+The current head includes the Phase 2 transactional event inbox, Phase 3 recovery cases and immutable policy history, and Phase 4 action outbox, execution attempts, and verified outcomes. Financial-history migrations intentionally refuse destructive downgrades.

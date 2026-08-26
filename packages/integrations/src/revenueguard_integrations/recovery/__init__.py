@@ -1,4 +1,4 @@
-"""Phase 3 recovery application orchestration."""
+"""Recovery decisioning and durable action authorization."""
 
 from revenueguard_integrations.recovery.service import (
     RecoveryApplicationService,

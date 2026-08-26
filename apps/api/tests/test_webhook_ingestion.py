@@ -120,6 +120,90 @@ async def test_accepts_exact_raw_body_and_uses_resolved_tenant(
     assert ingestion.invalid == []
 
 
+async def test_missing_routing_header_uses_explicit_single_merchant_fallback(
+    resolved_merchant: ResolvedMerchant,
+) -> None:
+    resolver = FakeMerchantResolver(resolved_merchant)
+    ingestion = FakeIngestionService()
+    settings = Settings(razorpay_merchant_id="merchant_internal_123")
+
+    async with make_client(resolver, ingestion, settings) as client:
+        response = await client.post(
+            WEBHOOK_PATH,
+            content=RAW_BODY,
+            headers=webhook_headers(
+                signature=sign(),
+                routing_identifier=None,
+            ),
+        )
+
+    assert response.status_code == 202
+    assert resolver.routing_identifiers == ["merchant_internal_123"]
+    assert [webhook.merchant_id for webhook in ingestion.verified] == ["merchant_internal_123"]
+
+
+async def test_single_merchant_fallback_still_requires_a_valid_signature(
+    resolved_merchant: ResolvedMerchant,
+) -> None:
+    resolver = FakeMerchantResolver(resolved_merchant)
+    ingestion = FakeIngestionService()
+    settings = Settings(razorpay_merchant_id="merchant_internal_123")
+
+    async with make_client(resolver, ingestion, settings) as client:
+        response = await client.post(
+            WEBHOOK_PATH,
+            content=RAW_BODY,
+            headers=webhook_headers(
+                signature="0" * 64,
+                routing_identifier=None,
+            ),
+        )
+
+    assert response.status_code == 401
+    assert ingestion.verified == []
+    assert len(ingestion.invalid) == 1
+    assert ingestion.invalid[0].merchant_id == "merchant_internal_123"
+
+
+async def test_supplied_wrong_route_never_uses_single_merchant_fallback() -> None:
+    resolver = FakeMerchantResolver(None)
+    ingestion = FakeIngestionService()
+    settings = Settings(razorpay_merchant_id="merchant_internal_123")
+
+    async with make_client(resolver, ingestion, settings) as client:
+        response = await client.post(
+            WEBHOOK_PATH,
+            content=RAW_BODY,
+            headers=webhook_headers(
+                signature=sign(),
+                routing_identifier="merchant_wrong",
+            ),
+        )
+
+    assert response.status_code == 401
+    assert resolver.routing_identifiers == ["merchant_wrong"]
+    assert ingestion.verified == []
+    assert ingestion.invalid == []
+
+
+async def test_supplied_blank_route_never_uses_single_merchant_fallback(
+    resolved_merchant: ResolvedMerchant,
+) -> None:
+    resolver = FakeMerchantResolver(resolved_merchant)
+    ingestion = FakeIngestionService()
+    settings = Settings(razorpay_merchant_id="merchant_internal_123")
+    headers = webhook_headers(signature=sign())
+    headers["X-RevenueGuard-Merchant-Id"] = "   "
+
+    async with make_client(resolver, ingestion, settings) as client:
+        response = await client.post(WEBHOOK_PATH, content=RAW_BODY, headers=headers)
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "missing required header: X-RevenueGuard-Merchant-Id"}
+    assert resolver.routing_identifiers == []
+    assert ingestion.verified == []
+
+
 async def test_returns_200_when_durable_inbox_reports_duplicate(
     resolved_merchant: ResolvedMerchant,
 ) -> None:

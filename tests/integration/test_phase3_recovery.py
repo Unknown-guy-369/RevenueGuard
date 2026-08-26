@@ -43,6 +43,9 @@ from revenueguard_integrations.persistence import (
 from revenueguard_integrations.persistence import (
     CaseTransition as CaseTransitionRow,
 )
+from revenueguard_integrations.persistence import (
+    RecoveryAction as RecoveryActionRow,
+)
 from revenueguard_integrations.recovery import RecoveryApplicationService
 from revenueguard_worker import tasks as worker_tasks
 from sqlalchemy import func, select, text
@@ -313,7 +316,7 @@ async def test_policy_review_conversion_digest_and_optimistic_transition(
             target=case.subject_id,
             amount_minor=case.revenue_at_risk_minor,
             currency=case.currency,
-            logical_attempt=0,
+            logical_attempt=1,
             policy_digest=policy.content_digest,
         ).digest()
         review = HumanReviewRequest(
@@ -373,7 +376,7 @@ async def test_policy_review_conversion_digest_and_optimistic_transition(
             )
 
 
-async def test_recovery_service_is_atomic_and_replay_idempotent_without_phase4_effects(
+async def test_recovery_service_is_atomic_and_replay_idempotent_when_policy_defers(
     phase3_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     merchant_id = "merchant_service"
@@ -407,7 +410,7 @@ async def test_recovery_service_is_atomic_and_replay_idempotent_without_phase4_e
         case = (await session.scalars(select(RecoveryCase))).one()
         assert case.state == CaseState.DEFERRED.value
         assert case.state != CaseState.EXECUTING.value
-        assert "recovery_actions" not in Base.metadata.tables
+        assert await session.scalar(select(func.count()).select_from(RecoveryActionRow)) == 0
 
 
 async def test_deferred_case_is_re_evaluated_against_current_policy_and_provider_truth(
@@ -482,6 +485,7 @@ async def test_human_approval_is_action_bound_and_rechecked_before_ready(
     async with phase3_factory.begin() as session:
         approved = await RecoveryApplicationService(
             RecoveryRepository(session),
+            clock=lambda: NOW + timedelta(minutes=1),
             id_generator=lambda _prefix: next(ids),
         ).decide_review(
             merchant_id=merchant_id,

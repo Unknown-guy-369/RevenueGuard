@@ -46,7 +46,7 @@ api:
 	uv run uvicorn revenueguard_api.main:app --host 0.0.0.0 --port 8000 --reload
 
 worker:
-	uv run celery -A revenueguard_worker.celery_app:celery_app worker --beat --queues=celery,event_dispatch,event_ingestion --loglevel=INFO
+	uv run celery -A revenueguard_worker.celery_app:celery_app worker --beat --queues=celery,event_dispatch,event_ingestion,action_dispatch,action_execution,action_reconciliation --loglevel=INFO
 
 web:
 	npm run dev:web

@@ -1,4 +1,4 @@
-"""Transactional Phase 3 recovery orchestration with no external effects."""
+"""Transactional recovery decisioning and action authorization."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from revenueguard_domain import (
     ActionFingerprintInput,
+    ActionStatus,
     ActionType,
     CandidateAction,
     CaseState,
@@ -24,11 +25,13 @@ from revenueguard_domain import (
     PolicyDecision,
     PolicyEvaluationInput,
     PolicyResult,
+    RecoveryAction,
     RecoveryCase,
     RevenueRiskEvent,
     ReviewDecisionType,
     ReviewStatus,
     VersionBundle,
+    action_idempotency_key,
     diagnose_event,
     evaluate_policy,
     expire_review,
@@ -40,13 +43,14 @@ from revenueguard_domain import (
 )
 
 from revenueguard_integrations.persistence import (
+    ActionRepository,
     EvidenceDisposition,
     NormalizedEvent,
     RecoveryRepository,
     order_evidence,
 )
 
-APPLICATION_VERSION: Final = "0.1.0-phase3"
+APPLICATION_VERSION: Final = "0.1.0-phase4"
 _PAID_STATUSES: Final = frozenset({"CAPTURED", "CHARGED", "COMPLETED", "PAID"})
 _CANCELLED_STATUSES: Final = frozenset({"CANCELLED", "HALTED"})
 
@@ -63,19 +67,17 @@ class RecoveryServiceResult:
     reason_code: str
     receipt_id: str | None = None
     review_id: str | None = None
+    action_id: str | None = None
 
 
 class RecoveryApplicationService:
-    """Coordinate domain decisions inside a caller-owned database transaction.
-
-    This Phase 3 service deliberately stops at ``READY``. It never creates an action,
-    calls a provider, contacts a customer, or transitions a case to ``EXECUTING``.
-    """
+    """Authorize durable actions without ever calling an external provider."""
 
     def __init__(
         self,
         repository: RecoveryRepository,
         *,
+        action_repository: ActionRepository | None = None,
         clock: Clock | None = None,
         id_generator: IdGenerator | None = None,
         application_version: str = APPLICATION_VERSION,
@@ -86,6 +88,11 @@ class RecoveryApplicationService:
         if review_ttl <= timedelta(0):
             raise ValueError("review_ttl must be positive")
         self._repository = repository
+        self._action_repository = action_repository
+        if self._action_repository is None:
+            repository_session = getattr(repository, "session", None)
+            if repository_session is not None:
+                self._action_repository = ActionRepository(repository_session)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or _new_id
         self._application_version = application_version
@@ -537,6 +544,10 @@ class RecoveryApplicationService:
             cancelled=status in _CANCELLED_STATUSES,
             diagnosis_defer_until=diagnosis.defer_until,
             approval=approval,
+            unknown_equivalent_action=await self._has_unknown_equivalent(
+                case=checking,
+                candidates=diagnosis.candidates,
+            ),
         )
         decision = evaluate_policy(policy, evaluation)
         review = None
@@ -564,8 +575,15 @@ class RecoveryApplicationService:
             terminal_reason=terminal_reason,
             next_evaluation_at=decision.next_evaluation_at,
         )
+        receipt_id = self._id_generator("receipt")
+        action = self._build_action(
+            case=decided_case,
+            decision=decision,
+            receipt_id=receipt_id,
+            authorized_at=evaluated_at,
+        )
         receipt = DecisionReceipt(
-            receipt_id=self._id_generator("receipt"),
+            receipt_id=receipt_id,
             case_id=case.case_id,
             merchant_id=case.merchant_id,
             correlation_id=event_row.correlation_id,
@@ -583,8 +601,19 @@ class RecoveryApplicationService:
             created_at=evaluated_at,
             resulting_state=decided_case.state,
             human_review_id=review.review_id if review else None,
+            resulting_action_id=action.action_id if action else None,
         )
         await self._repository.store_receipt(receipt)
+        if action is not None:
+            if self._action_repository is None:
+                raise RuntimeError("PROCEED requires the durable action repository")
+            await self._action_repository.store_action(
+                action,
+                policy_version=policy.version,
+                correlation_id=event_row.correlation_id,
+                max_attempts=3,
+                reconciliation_deadline=evaluated_at + timedelta(hours=1),
+            )
         return RecoveryServiceResult(
             normalized_event_id=event_row.id,
             case_id=decided_case.case_id,
@@ -593,6 +622,71 @@ class RecoveryApplicationService:
             reason_code=decision.reason_codes[-1],
             receipt_id=receipt.receipt_id,
             review_id=review.review_id if review else None,
+            action_id=action.action_id if action else None,
+        )
+
+    async def _has_unknown_equivalent(
+        self,
+        *,
+        case: RecoveryCase,
+        candidates: tuple[CandidateAction, ...],
+    ) -> bool:
+        if self._action_repository is None:
+            return False
+        for candidate in candidates:
+            if candidate.action_type is ActionType.NO_ACTION:
+                continue
+            if await self._action_repository.has_unknown_equivalent(
+                merchant_id=case.merchant_id,
+                recovery_case_id=case.case_id,
+                action_type=candidate.action_type,
+                target_id=candidate.target,
+            ):
+                return True
+        return False
+
+    def _build_action(
+        self,
+        *,
+        case: RecoveryCase,
+        decision: PolicyDecision,
+        receipt_id: str,
+        authorized_at: datetime,
+    ) -> RecoveryAction | None:
+        if decision.result is not PolicyResult.PROCEED:
+            return None
+        candidate = decision.selected_action
+        logical_attempt = max(1, candidate.logical_attempt)
+        key = action_idempotency_key(
+            merchant_id=case.merchant_id,
+            case_id=case.case_id,
+            action_type=candidate.action_type,
+            target_type=case.subject_type,
+            target_id=candidate.target,
+            logical_attempt=logical_attempt,
+        )
+        parameters: dict[str, object] = {
+            "amount_minor": case.revenue_at_risk_minor,
+            "currency": case.currency,
+            "provider_mode": "TEST",
+        }
+        if candidate.channel is not None:
+            parameters["channel"] = f"SIMULATED_{candidate.channel.value}"
+        return RecoveryAction(
+            action_id=f"action_{key.rsplit(':', maxsplit=1)[-1][:32]}",
+            case_id=case.case_id,
+            merchant_id=case.merchant_id,
+            decision_receipt_id=receipt_id,
+            action_type=candidate.action_type,
+            target_type=case.subject_type,
+            target_id=candidate.target,
+            logical_attempt=logical_attempt,
+            idempotency_key=key,
+            status=ActionStatus.PENDING,
+            parameters=parameters,
+            authorized_at=authorized_at,
+            execute_after=authorized_at,
+            created_at=authorized_at,
         )
 
     async def _transition(

@@ -27,10 +27,21 @@ celery_app.conf.update(
         "dispatch-durable-webhook-events": {
             "task": "revenueguard.events.dispatch_pending",
             "schedule": 5.0,
-        }
+        },
+        "dispatch-durable-recovery-actions": {
+            "task": "revenueguard.actions.dispatch_pending",
+            "schedule": 5.0,
+        },
+        "reconcile-unknown-recovery-actions": {
+            "task": "revenueguard.actions.reconcile_unknown",
+            "schedule": 30.0,
+        },
     },
     task_routes={
         "revenueguard.events.dispatch_pending": {"queue": "event_dispatch"},
         "revenueguard.events.process": {"queue": "event_ingestion"},
+        "revenueguard.actions.dispatch_pending": {"queue": "action_dispatch"},
+        "revenueguard.actions.execute": {"queue": "action_execution"},
+        "revenueguard.actions.reconcile_unknown": {"queue": "action_reconciliation"},
     },
 )

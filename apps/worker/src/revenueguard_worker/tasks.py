@@ -1,4 +1,4 @@
-"""Durable event-ingestion and Phase 3 recovery-decision worker tasks."""
+"""Durable event ingestion, action execution, and outcome reconciliation tasks."""
 
 from __future__ import annotations
 
@@ -7,7 +7,16 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Literal, TypedDict, cast
 
+from revenueguard_domain import ActionType, RecoveryAction
+from revenueguard_integrations.execution import (
+    ActionExecutionService,
+    ActionProvider,
+    DeterministicSimulatorAdapter,
+    ExecutionDisposition,
+    RazorpayTestModeAdapter,
+)
 from revenueguard_integrations.persistence import (
+    ActionRepository,
     EventDispatch,
     EventIngestionRepository,
     RecoveryRepository,
@@ -44,6 +53,23 @@ class DispatchResult(TypedDict):
 class ProcessingResult(TypedDict):
     dispatch_id: str
     status: Literal["processed", "already_processed", "dead_letter", "retry_scheduled"]
+
+
+class ActionDispatchResult(TypedDict):
+    claimed: int
+    published: int
+    rescheduled: int
+
+
+class ActionExecutionResult(TypedDict):
+    action_id: str
+    status: str
+    case_state: str
+
+
+class ReconciliationResult(TypedDict):
+    stale_calls_marked_unknown: int
+    reconciled: int
 
 
 @celery_app.task(name="revenueguard.system.ping")  # type: ignore[untyped-decorator]
@@ -93,6 +119,25 @@ def process_webhook_event(
             "dead_letter" if state == "DEAD_LETTER" else "retry_scheduled"
         )
         return {"dispatch_id": dispatch_id, "status": status}
+
+
+@celery_app.task(name="revenueguard.actions.dispatch_pending")  # type: ignore[untyped-decorator]
+def dispatch_pending_actions() -> ActionDispatchResult:
+    return asyncio.run(_dispatch_pending_actions())
+
+
+@celery_app.task(name="revenueguard.actions.execute")  # type: ignore[untyped-decorator]
+def execute_recovery_action(
+    merchant_id: str,
+    action_id: str,
+    lease_token: str,
+) -> ActionExecutionResult:
+    return asyncio.run(_execute_recovery_action(merchant_id, action_id, lease_token))
+
+
+@celery_app.task(name="revenueguard.actions.reconcile_unknown")  # type: ignore[untyped-decorator]
+def reconcile_unknown_actions() -> ReconciliationResult:
+    return asyncio.run(_reconcile_unknown_actions())
 
 
 async def _dispatch_pending_events() -> DispatchResult:
@@ -184,15 +229,154 @@ async def _process_webhook_event(
             webhook_event_id=webhook_event_id,
             correlations=_event_correlations(event.to_dict()),
         )
-        await RecoveryApplicationService(RecoveryRepository(session)).process_event(
+        action_repository = ActionRepository(session)
+        await RecoveryApplicationService(
+            RecoveryRepository(session),
+            action_repository=action_repository,
+        ).process_event(
             merchant_id=merchant_id,
             normalized_event_id=normalized.id,
         )
+        await ActionExecutionService(
+            action_repository,
+            RecoveryRepository(session),
+            unknown_ttl=timedelta(seconds=settings.action_unknown_ttl_seconds),
+        ).verify_signed_event(event=event, webhook_event_id=webhook_event_id)
         await repository.mark_dispatch_succeeded(
             dispatch_id=dispatch_id,
             completed_at=datetime.now(UTC),
         )
     return {"dispatch_id": dispatch_id, "status": "processed"}
+
+
+async def _dispatch_pending_actions() -> ActionDispatchResult:
+    now = datetime.now(UTC)
+    async with session_scope(session_factory) as session:
+        claimed = await ActionRepository(session).claim_due_actions(
+            now=now,
+            lease_for=timedelta(seconds=settings.action_dispatch_stale_after_seconds),
+            limit=settings.action_dispatch_batch_size,
+        )
+    published = 0
+    rescheduled = 0
+    for claim in claimed:
+        task_id = f"action-{claim.action_id}-{claim.lease_token}"
+        try:
+            execute_recovery_action.apply_async(
+                args=[claim.merchant_id, claim.action_id, claim.lease_token],
+                task_id=task_id,
+                queue="action_execution",
+            )
+            published += 1
+        except Exception:
+            # The lease expires and makes the never-started action claimable again.
+            rescheduled += 1
+    return {"claimed": len(claimed), "published": published, "rescheduled": rescheduled}
+
+
+async def _execute_recovery_action(
+    merchant_id: str,
+    action_id: str,
+    lease_token: str,
+) -> ActionExecutionResult:
+    async with session_scope(session_factory) as session:
+        service = ActionExecutionService(
+            ActionRepository(session),
+            RecoveryRepository(session),
+            unknown_ttl=timedelta(seconds=settings.action_unknown_ttl_seconds),
+        )
+        prepared = await service.prepare_execution(
+            merchant_id=merchant_id,
+            action_id=action_id,
+            lease_token=lease_token,
+            started_at=datetime.now(UTC),
+        )
+
+    if isinstance(prepared, ExecutionDisposition):
+        return {
+            "action_id": action_id,
+            "status": prepared.action_status.value,
+            "case_state": prepared.case_state.value,
+        }
+
+    provider = _provider_for(prepared.action)
+    provider_result = await provider.execute(prepared.action)
+
+    async with session_scope(session_factory) as session:
+        disposition = await ActionExecutionService(
+            ActionRepository(session),
+            RecoveryRepository(session),
+            unknown_ttl=timedelta(seconds=settings.action_unknown_ttl_seconds),
+        ).record_execution_result(
+            merchant_id=merchant_id,
+            action_id=action_id,
+            lease_token=lease_token,
+            result=provider_result,
+        )
+    return {
+        "action_id": action_id,
+        "status": disposition.action_status.value,
+        "case_state": disposition.case_state.value,
+    }
+
+
+async def _reconcile_unknown_actions() -> ReconciliationResult:
+    now = datetime.now(UTC)
+    async with session_scope(session_factory) as session:
+        service = ActionExecutionService(
+            ActionRepository(session),
+            RecoveryRepository(session),
+            unknown_ttl=timedelta(seconds=settings.action_unknown_ttl_seconds),
+        )
+        stale = await service.mark_stale_calls_unknown(
+            now=now,
+            limit=settings.action_reconciliation_batch_size,
+        )
+
+    async with session_scope(session_factory) as session:
+        rows = await ActionRepository(session).actions_for_reconciliation(
+            now=now,
+            limit=settings.action_reconciliation_batch_size,
+        )
+        identities = tuple((row.merchant_id, row.id) for row in rows)
+
+    reconciled = 0
+    for merchant_id, action_id in identities:
+        async with session_scope(session_factory) as session:
+            action = await ActionRepository(session).domain_action(
+                merchant_id=merchant_id,
+                action_id=action_id,
+            )
+        if action is None:
+            continue
+        lookup = await _provider_for(action).lookup(action)
+        async with session_scope(session_factory) as session:
+            await ActionExecutionService(
+                ActionRepository(session),
+                RecoveryRepository(session),
+                unknown_ttl=timedelta(seconds=settings.action_unknown_ttl_seconds),
+            ).record_lookup(
+                merchant_id=merchant_id,
+                action_id=action_id,
+                result=lookup,
+            )
+        reconciled += 1
+    return {"stale_calls_marked_unknown": len(stale), "reconciled": reconciled}
+
+
+def _provider_for(action: RecoveryAction) -> ActionProvider:
+    if (
+        settings.action_provider == "RAZORPAY_TEST"
+        and action.action_type is ActionType.CREATE_PAYMENT_LINK
+    ):
+        if settings.razorpay_key_id is None or settings.razorpay_key_secret is None:
+            raise RuntimeError("Razorpay Test Mode execution requires configured credentials")
+        return RazorpayTestModeAdapter(
+            key_id=settings.razorpay_key_id.get_secret_value(),
+            key_secret=settings.razorpay_key_secret.get_secret_value(),
+            timeout_seconds=settings.razorpay_timeout_seconds,
+        )
+    return DeterministicSimulatorAdapter()
 
 
 async def _record_processing_failure(

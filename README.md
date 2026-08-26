@@ -2,7 +2,7 @@
 
 RevenueGuard is a bounded, event-driven revenue recovery control plane for Razorpay merchants. It is designed to detect revenue at risk, coordinate safe recovery decisions, apply deterministic merchant policy, execute approved actions idempotently, and count recovered money only after authoritative verification.
 
-> **Current status — Phase 3 complete:** recovery case and deterministic policy decisioning are active. Money movement, customer contact, action execution, outcome verification, and recovered-revenue accounting remain disabled until Phase 4.
+> **Current status — Phase 4 complete:** deterministic policy now commits stable, idempotent action intents to PostgreSQL; workers execute Test Mode or explicitly simulated effects with bounded retries; ambiguous calls become `UNKNOWN`; and recovered revenue is counted only after authoritative provider evidence.
 
 ## Safety model
 
@@ -16,7 +16,7 @@ event → durable state → bounded recommendation → deterministic policy
 - PostgreSQL is the authoritative financial and workflow store.
 - Redis is used only for queues, caching, rate limits, and coordination.
 - An LLM or LangGraph node may recommend an action but cannot execute money movement or customer contact.
-- Every future external action must pass deterministic policy and use a durable outbox with a stable idempotency key.
+- Every external action passes deterministic policy at authorization and again immediately before execution, then uses a durable outbox with a stable idempotency key.
 - Ambiguous provider results become `UNKNOWN`; they are never guessed as successful or failed.
 - Revenue is counted as recovered only after authoritative provider confirmation.
 - Development and demonstrations must use Razorpay Test Mode.
@@ -42,20 +42,20 @@ flowchart LR
     Verify --> Case
 ```
 
-Phase 2 accepts authenticated Test Mode events into PostgreSQL and normalizes them asynchronously without pretending that later recovery behavior exists.
+Phase 4 extends the authenticated event path through durable action authorization, isolated execution, and authoritative outcome reconciliation without granting external-action authority to an LLM.
 
-## Phase 2 capabilities
+## Current capabilities
 
 | Area     | Implemented                                                                                                     |
 | -------- | --------------------------------------------------------------------------------------------------------------- |
 | API      | Raw-body Razorpay HMAC verification, tenant resolution, durable acceptance/deduplication, and system endpoints   |
-| Worker   | Recoverable PostgreSQL-to-Celery dispatch, idempotent normalization, bounded retry, and dead-letter retention    |
+| Worker   | Durable event and action dispatch, bounded explicit-failure retry, crash-to-`UNKNOWN`, reconciliation, and dead-letter retention |
 | Web      | Responsive Next.js operational dashboard based on the Coinbase design reference                                 |
-| Database | Merchant-scoped inbox, normalized events, correlations, provider entities, and dispatch state via Alembic       |
-| Domain   | Framework-independent typed `RevenueRiskEvent` and versioned Phase 0 contracts                                  |
+| Database | Merchant-scoped inbox, cases, decisions, action outbox, attempts, and append-only verified outcomes via Alembic |
+| Domain   | Typed cases, deterministic policy, stable action identity, explicit uncertainty, and verified outcome contracts |
 | Quality  | Ruff, mypy, pytest, ESLint, TypeScript, Vitest, Prettier, and production build gates                            |
 | Delivery | Six-mode webhook replay CLI plus the existing containers, locked dependencies, Make targets, and CI            |
-| Safety   | Invalid signatures never normalize; duplicate delivery creates one logical event; external actions stay absent   |
+| Safety   | Calls are recorded before execution; incomplete calls are never blindly replayed; unverified outcomes count zero revenue |
 
 ## Technology stack
 
@@ -233,7 +233,15 @@ The checked-in `.env.example` contains local, non-secret defaults. Important var
 - `REVENUEGUARD_REDIS_URL`
 - `REVENUEGUARD_CELERY_BROKER_URL`
 - `REVENUEGUARD_CELERY_RESULT_BACKEND`
+- `REVENUEGUARD_RAZORPAY_MERCHANT_ID`
+- `REVENUEGUARD_ACTION_PROVIDER` (`SIMULATOR` by default or `RAZORPAY_TEST`)
+- `REVENUEGUARD_ACTION_UNKNOWN_TTL_SECONDS`
 - `REVENUEGUARD_API_URL`
+
+Razorpay's direct webhook requests do not include RevenueGuard's internal merchant-routing
+header. When `REVENUEGUARD_RAZORPAY_MERCHANT_ID` explicitly configures the sole Test Mode
+merchant, a request with no routing header uses that merchant and still must pass raw-body
+signature verification. A supplied blank, unknown, or incorrect routing header fails closed.
 
 Razorpay, webhook, LLM, and contact-provider credentials must remain untracked. Do not add secrets to variables prefixed with `NEXT_PUBLIC_`, because those values may be exposed to the browser.
 
@@ -252,8 +260,8 @@ Razorpay, webhook, LLM, and contact-provider credentials must remain untracked. 
 1. **Completed:** product contracts and safety decisions.
 2. **Completed:** reproducible repository and service scaffold.
 3. **Completed:** transactional webhook ingestion, event inbox, normalization, and core persistence.
-4. Recovery case state machine and deterministic merchant policy.
-5. Idempotent outbox, provider execution, and outcome reconciliation.
+4. **Completed:** recovery case state machine and deterministic merchant policy.
+5. **Completed:** idempotent outbox, Test Mode/simulator execution, explicit `UNKNOWN`, and authoritative outcome reconciliation.
 6. Bounded case intelligence and the three core recovery playbooks.
 7. Portfolio intelligence, auditability, evaluation, security hardening, and deployment.
 

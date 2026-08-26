@@ -652,6 +652,227 @@ class DecisionReceipt(Base):
     )
 
 
+class RecoveryAction(TimestampColumns, Base):
+    """Policy-authorized action and durable execution outbox row."""
+
+    __tablename__ = "recovery_actions"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    decision_receipt_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    action_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    logical_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="PENDING")
+    parameters: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    authorized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    execute_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_object_id: Mapped[str | None] = mapped_column(String(128))
+    unknown_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconciliation_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error_code: Mapped[str | None] = mapped_column(String(128))
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "decision_receipt_id"],
+            ["decision_receipts.merchant_id", "decision_receipts.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "policy_version"],
+            ["merchant_policy_versions.merchant_id", "merchant_policy_versions.version"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("idempotency_key", name="uq_recovery_actions_idempotency_key"),
+        CheckConstraint("schema_version = '1.0'", name="ck_recovery_actions_schema_version"),
+        CheckConstraint(
+            "status IN ('PENDING', 'SUCCEEDED', 'FAILED', 'UNKNOWN')",
+            name="ck_recovery_actions_status",
+        ),
+        CheckConstraint("logical_attempt >= 1", name="ck_recovery_actions_logical_attempt"),
+        CheckConstraint(
+            "attempt_count >= 0 AND max_attempts >= 1 AND attempt_count <= max_attempts",
+            name="ck_recovery_actions_attempt_bounds",
+        ),
+        CheckConstraint(
+            "execute_after >= authorized_at AND next_attempt_at >= authorized_at",
+            name="ck_recovery_actions_schedule",
+        ),
+        CheckConstraint(
+            "(lease_token IS NULL AND lease_expires_at IS NULL) OR "
+            "(lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="ck_recovery_actions_lease_pair",
+        ),
+        CheckConstraint(
+            "(status = 'UNKNOWN' AND unknown_since IS NOT NULL AND "
+            "reconciliation_deadline IS NOT NULL) OR "
+            "(status <> 'UNKNOWN' AND unknown_since IS NULL)",
+            name="ck_recovery_actions_unknown_metadata",
+        ),
+        Index(
+            "uq_recovery_actions_active_equivalent",
+            "merchant_id",
+            "recovery_case_id",
+            "action_type",
+            "target_type",
+            "target_id",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING', 'SUCCEEDED', 'UNKNOWN')"),
+        ),
+        Index(
+            "ix_recovery_actions_due",
+            "status",
+            "next_attempt_at",
+            postgresql_where=text("status = 'PENDING' AND dead_lettered_at IS NULL"),
+        ),
+        Index(
+            "ix_recovery_actions_unknown",
+            "status",
+            "reconciliation_deadline",
+            postgresql_where=text("status = 'UNKNOWN'"),
+        ),
+    )
+
+
+class ActionAttempt(Base):
+    __tablename__ = "action_attempts"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_action_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    lease_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome_status: Mapped[str | None] = mapped_column(String(32))
+    response_category: Mapped[str | None] = mapped_column(String(64))
+    provider_object_id: Mapped[str | None] = mapped_column(String(128))
+    provider_status_code: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    response_reference: Mapped[str | None] = mapped_column(String(512))
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_action_id"],
+            ["recovery_actions.merchant_id", "recovery_actions.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "merchant_id",
+            "recovery_action_id",
+            "attempt_number",
+            name="uq_action_attempts_action_number",
+        ),
+        UniqueConstraint("request_id", name="uq_action_attempts_request_id"),
+        CheckConstraint("attempt_number >= 1", name="ck_action_attempts_number"),
+        CheckConstraint(
+            "outcome_status IS NULL OR outcome_status IN "
+            "('PENDING', 'SUCCEEDED', 'FAILED', 'UNKNOWN')",
+            name="ck_action_attempts_outcome_status",
+        ),
+        CheckConstraint(
+            "(completed_at IS NULL AND outcome_status IS NULL) OR "
+            "(completed_at IS NOT NULL AND outcome_status IS NOT NULL AND "
+            "completed_at >= started_at)",
+            name="ck_action_attempts_completion",
+        ),
+        Index("ix_action_attempts_action", "merchant_id", "recovery_action_id", "attempt_number"),
+    )
+
+
+class VerifiedOutcome(Base):
+    __tablename__ = "verified_outcomes"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    recovery_action_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    outcome_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    is_authoritative: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence_source: Mapped[str] = mapped_column(String(32), nullable=False)
+    evidence_reference: Mapped[str | None] = mapped_column(String(512))
+    provider_object_id: Mapped[str | None] = mapped_column(String(128))
+    recovered_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(128))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_action_id"],
+            ["recovery_actions.merchant_id", "recovery_actions.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("schema_version = '1.0'", name="ck_verified_outcomes_schema_version"),
+        CheckConstraint(
+            "outcome_status IN ('PENDING', 'SUCCEEDED', 'FAILED', 'UNKNOWN')",
+            name="ck_verified_outcomes_status",
+        ),
+        CheckConstraint(
+            "evidence_source IN ('SIGNED_WEBHOOK', 'PROVIDER_LOOKUP', 'PROVIDER_RESPONSE', "
+            "'SIMULATOR', 'NONE')",
+            name="ck_verified_outcomes_evidence_source",
+        ),
+        CheckConstraint(
+            "recovered_amount_minor >= 0", name="ck_verified_outcomes_amount_nonnegative"
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_verified_outcomes_currency_iso"),
+        CheckConstraint(
+            "recovered_amount_minor = 0 OR (outcome_status = 'SUCCEEDED' AND "
+            "is_authoritative AND evidence_reference IS NOT NULL AND verified_at IS NOT NULL)",
+            name="ck_verified_outcomes_recovered_authority",
+        ),
+        CheckConstraint(
+            "outcome_status <> 'UNKNOWN' OR (NOT is_authoritative AND "
+            "recovered_amount_minor = 0 AND verified_at IS NULL)",
+            name="ck_verified_outcomes_unknown",
+        ),
+        Index(
+            "uq_verified_outcomes_authoritative_success",
+            "merchant_id",
+            "recovery_action_id",
+            unique=True,
+            postgresql_where=text("is_authoritative AND outcome_status = 'SUCCEEDED'"),
+        ),
+        Index(
+            "ix_verified_outcomes_metrics",
+            "merchant_id",
+            "currency",
+            "verified_at",
+            postgresql_where=text(
+                "is_authoritative AND outcome_status = 'SUCCEEDED' AND recovered_amount_minor > 0"
+            ),
+        ),
+    )
+
+
 class CommunicationConsent(TimestampColumns, Base):
     __tablename__ = "communication_consents"
 

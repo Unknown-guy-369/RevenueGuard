@@ -144,6 +144,24 @@ class RazorpayNormalizationContractTests(unittest.TestCase):
                     NormalizedFailureCategory.NONE,
                 )
 
+    def test_payment_link_entity_declaration_may_be_omitted_by_provider(self) -> None:
+        document = _mutable_fixture("payment_link_paid.json")
+        payment_link = document["payload"]["payment_link"]["entity"]
+        payment_link.pop("entity")
+
+        event = _normalize_document(document)
+
+        self.assertEqual(event.payment_link_id, "plink_fixture_001")
+        self.assertEqual(event.amount_minor, 1_250_000)
+        self.assertEqual(event.currency, "INR")
+
+    def test_explicit_wrong_payment_link_entity_declaration_is_rejected(self) -> None:
+        document = _mutable_fixture("payment_link_paid.json")
+        document["payload"]["payment_link"]["entity"]["entity"] = "invoice"
+
+        with self.assertRaises(MalformedRazorpayEventError):
+            _normalize_document(document)
+
     def test_merchant_is_resolved_externally_not_from_provider_account_id(self) -> None:
         document = _mutable_fixture()
         document["account_id"] = "merchant_attacker_selected"

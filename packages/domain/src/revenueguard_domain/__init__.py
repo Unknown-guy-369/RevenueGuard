@@ -1,5 +1,12 @@
 """Framework-independent RevenueGuard domain package."""
 
+from revenueguard_domain.actions import (
+    ActionStatus,
+    EvidenceSource,
+    RecoveryAction,
+    VerifiedOutcome,
+    action_idempotency_key,
+)
 from revenueguard_domain.cases import (
     ALLOWED_TRANSITIONS,
     TERMINAL_STATES,
@@ -61,6 +68,7 @@ __all__ = [
     "TERMINAL_STATES",
     "ActionClass",
     "ActionFingerprintInput",
+    "ActionStatus",
     "ActionType",
     "CandidateAction",
     "CaseIdentity",
@@ -72,6 +80,7 @@ __all__ = [
     "DecisionReceipt",
     "Diagnosis",
     "EventSource",
+    "EvidenceSource",
     "HumanReviewDecision",
     "HumanReviewRequest",
     "IncidentConstraint",
@@ -81,15 +90,18 @@ __all__ = [
     "PolicyDecision",
     "PolicyEvaluationInput",
     "PolicyResult",
+    "RecoveryAction",
     "RecoveryCase",
     "RevenueRiskEvent",
     "ReviewDecisionType",
     "ReviewStatus",
     "StaleCaseVersionError",
     "SubjectType",
+    "VerifiedOutcome",
     "VersionBundle",
     "WorkflowType",
     "__version__",
+    "action_idempotency_key",
     "can_transition",
     "conservative_default_policy",
     "decide_review",

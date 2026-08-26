@@ -49,6 +49,25 @@ def _required_header(value: str | None, header_name: str) -> str:
     return value.strip()
 
 
+def _merchant_routing_identifier(
+    header_value: str | None,
+    *,
+    settings: Settings,
+) -> str:
+    """Resolve an explicit route or the sole configured Test Mode merchant.
+
+    Razorpay does not send RevenueGuard's internal tenant-routing header. The
+    fallback is therefore limited to the one merchant explicitly configured at
+    the composition root. A supplied blank or incorrect header never falls back.
+    """
+
+    if header_value is not None:
+        return _required_header(header_value, settings.razorpay_merchant_routing_header)
+    if settings.razorpay_merchant_id is not None:
+        return settings.razorpay_merchant_id
+    return _required_header(None, settings.razorpay_merchant_routing_header)
+
+
 async def _read_bounded_raw_body(request: Request, maximum_bytes: int) -> bytes:
     content_length = request.headers.get("content-length")
     if content_length is not None:
@@ -111,9 +130,9 @@ async def ingest_razorpay_webhook(
     configured_routing_value = request.headers.get(settings.razorpay_merchant_routing_header)
     if settings.razorpay_merchant_routing_header.lower() == "x-revenueguard-merchant-id":
         configured_routing_value = x_revenueguard_merchant_id
-    routing_identifier = _required_header(
+    routing_identifier = _merchant_routing_identifier(
         configured_routing_value,
-        settings.razorpay_merchant_routing_header,
+        settings=settings,
     )
 
     raw_body = await _read_bounded_raw_body(

@@ -93,6 +93,12 @@ class RecoveryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    @property
+    def session(self) -> AsyncSession:
+        """Expose the caller-owned transaction to closely related repositories."""
+
+        return self._session
+
     async def publish_policy(
         self,
         *,
@@ -410,6 +416,18 @@ class RecoveryRepository:
             statement = statement.with_for_update()
         row = (await self._session.scalars(statement)).one_or_none()
         return _review_from_row(row) if row is not None else None
+
+    async def get_decision_receipt(
+        self, *, merchant_id: str, receipt_id: str
+    ) -> DecisionReceipt | None:
+        return (
+            await self._session.scalars(
+                select(DecisionReceipt).where(
+                    DecisionReceipt.merchant_id == merchant_id,
+                    DecisionReceipt.id == receipt_id,
+                )
+            )
+        ).one_or_none()
 
     async def store_review(self, review: HumanReviewRequest) -> HumanReview:
         row = HumanReview(

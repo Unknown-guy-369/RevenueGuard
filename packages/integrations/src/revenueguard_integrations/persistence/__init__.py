@@ -1,5 +1,11 @@
 """PostgreSQL persistence boundary for durable event ingestion."""
 
+from revenueguard_integrations.persistence.action_repositories import (
+    ActionPersistenceError,
+    ActionRepository,
+    ClaimedAction,
+    RecoveryTotals,
+)
 from revenueguard_integrations.persistence.database import (
     AsyncSessionFactory,
     create_database_engine,
@@ -7,6 +13,7 @@ from revenueguard_integrations.persistence.database import (
     session_scope,
 )
 from revenueguard_integrations.persistence.models import (
+    ActionAttempt,
     Base,
     CaseTransition,
     CommunicationConsent,
@@ -20,9 +27,11 @@ from revenueguard_integrations.persistence.models import (
     NormalizedEvent,
     Payment,
     PortfolioIncident,
+    RecoveryAction,
     RecoveryCase,
     RecoveryCaseEvent,
     Subscription,
+    VerifiedOutcome,
     WebhookEvent,
 )
 from revenueguard_integrations.persistence.recovery_repositories import (
@@ -43,10 +52,14 @@ from revenueguard_integrations.persistence.repositories import (
 )
 
 __all__ = [
+    "ActionAttempt",
+    "ActionPersistenceError",
+    "ActionRepository",
     "AsyncSessionFactory",
     "AuthoritativeFacts",
     "Base",
     "CaseTransition",
+    "ClaimedAction",
     "CommunicationConsent",
     "Customer",
     "DecisionReceipt",
@@ -64,12 +77,15 @@ __all__ = [
     "NormalizedEvent",
     "Payment",
     "PortfolioIncident",
+    "RecoveryAction",
     "RecoveryCase",
     "RecoveryCaseEvent",
     "RecoveryPersistenceError",
     "RecoveryRepository",
+    "RecoveryTotals",
     "StaleRecoveryCaseError",
     "Subscription",
+    "VerifiedOutcome",
     "WebhookEvent",
     "WebhookInsertResult",
     "create_database_engine",

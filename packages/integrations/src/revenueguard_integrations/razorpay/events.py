@@ -95,7 +95,11 @@ def normalize_razorpay_event(
     payload = _required_mapping(document, "payload")
     payment = _optional_entity(payload, "payment")
     subscription = _optional_entity(payload, "subscription")
-    payment_link = _optional_entity(payload, "payment_link")
+    payment_link = _optional_entity(
+        payload,
+        "payment_link",
+        allow_missing_declaration=True,
+    )
 
     if event_type in _PAYMENT_EVENTS and payment is None:
         raise MalformedRazorpayEventError(f"{event_type} requires payload.payment.entity")
@@ -167,7 +171,10 @@ def _required_string(value: Mapping[str, object], field: str) -> str:
 
 
 def _optional_entity(
-    payload: Mapping[str, object], entity_name: str
+    payload: Mapping[str, object],
+    entity_name: str,
+    *,
+    allow_missing_declaration: bool = False,
 ) -> Mapping[str, object] | None:
     wrapper = payload.get(entity_name)
     if wrapper is None:
@@ -179,6 +186,8 @@ def _optional_entity(
         raise MalformedRazorpayEventError(f"payload.{entity_name}.entity must be an object")
     typed_entity = cast(Mapping[str, object], entity)
     declared_type = typed_entity.get("entity")
+    if declared_type is None and allow_missing_declaration:
+        return typed_entity
     if declared_type != entity_name:
         raise MalformedRazorpayEventError(
             f"payload.{entity_name}.entity.entity must be {entity_name!r}"

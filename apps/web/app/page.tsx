@@ -20,7 +20,7 @@ const controlSteps: StatusStep[] = [
   {
     label: "Outcome verified",
     detail: "Unknown stays unknown until provider evidence resolves it.",
-    state: "pending",
+    state: "ready",
   },
 ];
 
@@ -30,28 +30,28 @@ const architectureCards = [
     title: "FastAPI system boundary",
     description:
       "Typed liveness, readiness, and version contracts with PostgreSQL and Redis probes.",
-    tag: "Scaffolded",
+    tag: "Operational",
   },
   {
     eyebrow: "WORKER",
     title: "Loss-aware queue worker",
     description:
       "JSON-only Celery tasks, late acknowledgement, and worker-loss rejection are the starting defaults.",
-    tag: "Scaffolded",
+    tag: "Operational",
   },
   {
     eyebrow: "CONTRACTS",
     title: "Safety before runtime",
     description:
       "Five versioned domain schemas, six accepted ADRs, and frozen evaluation gates define the build.",
-    tag: "Validated",
+    tag: "Enforced",
   },
 ];
 
 const dependencyRows = [
   ["PostgreSQL", "Authoritative financial and workflow state", "Required"],
   ["Redis", "Queue, cache, rate limits, and coordination only", "Required"],
-  ["Razorpay", "Signed Test Mode webhook ingestion", "Enabled in Phase 2"],
+  ["Razorpay", "Signed Test Mode ingestion and payment-link execution", "Enabled in Phase 4"],
   ["LLM", "Read-only bounded reasoning", "Disabled until Phase 5"],
 ] as const;
 
@@ -78,7 +78,7 @@ export default function Home() {
 
         <div id="top" className="hero-grid shell">
           <div className="hero-copy">
-            <span className="badge badge-dark">PHASE 01 · FOUNDATION</span>
+            <span className="badge badge-dark">PHASE 04 · SAFE EFFECTS</span>
             <h1 id="hero-title">A recovery system that refuses to guess.</h1>
             <p>
               RevenueGuard separates reasoning, authorization, execution, and verification so every
@@ -119,9 +119,8 @@ export default function Home() {
             <span className="badge">SYSTEM FOUNDATION</span>
             <h2 id="system-title">Runtime pieces, without pretend outcomes.</h2>
             <p>
-              Phase 2 adds authenticated event ingestion, durable deduplication, and safe
-              asynchronous normalization. Recovery workflows begin only after persistence and policy
-              are implemented.
+              Phase 4 connects deterministic policy to a transactional action outbox, bounded Test
+              Mode execution, explicit unknown outcomes, and evidence-backed recovery accounting.
             </p>
           </div>
           <div className="card-grid">
@@ -170,7 +169,7 @@ export default function Home() {
             <h2 id="verification-title">Every task ends with proof.</h2>
           </div>
           <div className="verification-card">
-            <p className="overline">PHASE 1 CHECK</p>
+            <p className="overline">PHASE 4 CHECK</p>
             <ul>
               <li>Format and lint both workspaces</li>
               <li>Type-check Python and TypeScript</li>
@@ -193,7 +192,7 @@ export default function Home() {
           </a>
           <p>Bounded recovery. Verified outcomes.</p>
         </div>
-        <p>Phase 2 event control plane · No live money movement</p>
+        <p>Phase 4 effect control plane · Test Mode and verified outcomes only</p>
       </footer>
     </main>
   );
