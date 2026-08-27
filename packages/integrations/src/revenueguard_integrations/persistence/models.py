@@ -601,6 +601,62 @@ class HumanReview(Base):
     )
 
 
+class ModelPrediction(Base):
+    __tablename__ = "model_predictions"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    node: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    model_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("merchant_id", "run_id", "node", name="uq_model_predictions_run_node"),
+        CheckConstraint(
+            "node IN ('DIAGNOSIS_ASSISTANCE', 'STRATEGY_GENERATION', 'RANKING', "
+            "'EXPLANATION', 'GRAPH')",
+            name="ck_model_predictions_node",
+        ),
+        CheckConstraint("status IN ('SUCCEEDED', 'FALLBACK')", name="ck_model_predictions_status"),
+        CheckConstraint(
+            "input_sha256 ~ '^[0-9a-f]{64}$'", name="ck_model_predictions_input_digest"
+        ),
+        CheckConstraint(
+            "latency_ms >= 0 AND input_tokens >= 0 AND output_tokens >= 0",
+            name="ck_model_predictions_usage_nonnegative",
+        ),
+        CheckConstraint(
+            "(status = 'SUCCEEDED' AND failure_code IS NULL) OR "
+            "(status = 'FALLBACK' AND failure_code IS NOT NULL)",
+            name="ck_model_predictions_failure_metadata",
+        ),
+        Index(
+            "ix_model_predictions_case_created",
+            "merchant_id",
+            "recovery_case_id",
+            "created_at",
+        ),
+    )
+
+
 class DecisionReceipt(Base):
     __tablename__ = "decision_receipts"
 
@@ -620,6 +676,7 @@ class DecisionReceipt(Base):
     resulting_action_id: Mapped[str | None] = mapped_column(String(128))
     resulting_state: Mapped[str] = mapped_column(String(32), nullable=False)
     audit_entry_id: Mapped[str | None] = mapped_column(String(128))
+    model_prediction_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

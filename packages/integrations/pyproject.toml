@@ -5,6 +5,7 @@ description = "External provider adapters for RevenueGuard"
 requires-python = ">=3.14,<3.15"
 dependencies = [
   "asyncpg>=0.31",
+  "revenueguard-agents",
   "revenueguard-domain",
   "sqlalchemy[asyncio]>=2.0.44",
 ]
@@ -17,4 +18,5 @@ build-backend = "hatchling.build"
 packages = ["src/revenueguard_integrations"]
 
 [tool.uv.sources]
+revenueguard-agents = { workspace = true }
 revenueguard-domain = { workspace = true }

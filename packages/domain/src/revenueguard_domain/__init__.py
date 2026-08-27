@@ -32,6 +32,7 @@ from revenueguard_domain.events import (
     NormalizedFailureCategory,
     RevenueRiskEvent,
 )
+from revenueguard_domain.intelligence import ModelNode, ModelPrediction, PredictionStatus
 from revenueguard_domain.policy import (
     ACTION_CLASSES,
     ActionClass,
@@ -86,10 +87,13 @@ __all__ = [
     "IncidentConstraint",
     "IncidentScope",
     "MerchantPolicySnapshot",
+    "ModelNode",
+    "ModelPrediction",
     "NormalizedFailureCategory",
     "PolicyDecision",
     "PolicyEvaluationInput",
     "PolicyResult",
+    "PredictionStatus",
     "RecoveryAction",
     "RecoveryCase",
     "RevenueRiskEvent",

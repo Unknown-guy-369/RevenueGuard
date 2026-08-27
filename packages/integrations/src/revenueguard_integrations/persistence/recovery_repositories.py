@@ -1,4 +1,4 @@
-"""Transactional persistence for Phase 3 recovery decisions."""
+"""Transactional persistence for recovery cases, policy, and decision evidence."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from revenueguard_domain import (
     IncidentConstraint,
     IncidentScope,
     MerchantPolicySnapshot,
+    ModelPrediction,
     ReviewStatus,
     SubjectType,
     WorkflowType,
@@ -43,6 +44,9 @@ from revenueguard_integrations.persistence.models import (
     RecoveryCase,
     RecoveryCaseEvent,
     Subscription,
+)
+from revenueguard_integrations.persistence.models import (
+    ModelPrediction as ModelPredictionRow,
 )
 from revenueguard_integrations.persistence.status_ordering import compare_provider_status
 
@@ -508,12 +512,59 @@ class RecoveryRepository:
             resulting_action_id=receipt.resulting_action_id,
             resulting_state=receipt.resulting_state.value,
             audit_entry_id=receipt.audit_entry_id,
+            model_prediction_ids=list(receipt.model_prediction_ids),
             schema_version=receipt.schema_version,
             created_at=receipt.created_at,
         )
         self._session.add(row)
         await self._session.flush()
         return row
+
+    async def store_model_predictions(
+        self, predictions: tuple[ModelPrediction, ...]
+    ) -> tuple[ModelPredictionRow, ...]:
+        rows: list[ModelPredictionRow] = []
+        for prediction in predictions:
+            existing = await self._session.get(
+                ModelPredictionRow,
+                (prediction.merchant_id, prediction.prediction_id),
+            )
+            if existing is not None:
+                if (
+                    existing.run_id != prediction.run_id
+                    or existing.node != prediction.node.value
+                    or existing.input_sha256 != prediction.input_sha256
+                ):
+                    raise RecoveryPersistenceError(
+                        "MODEL_PREDICTION_ID_CONFLICT",
+                        "prediction ID already identifies different model evidence",
+                    )
+                rows.append(existing)
+                continue
+            row = ModelPredictionRow(
+                merchant_id=prediction.merchant_id,
+                id=prediction.prediction_id,
+                run_id=prediction.run_id,
+                recovery_case_id=prediction.case_id,
+                correlation_id=prediction.correlation_id,
+                node=prediction.node.value,
+                status=prediction.status.value,
+                input_sha256=prediction.input_sha256,
+                output_payload=dict(prediction.output_payload),
+                model_version=prediction.model_version,
+                prompt_version=prediction.prompt_version,
+                schema_version=prediction.schema_version,
+                feature_version=prediction.feature_version,
+                latency_ms=prediction.latency_ms,
+                input_tokens=prediction.input_tokens,
+                output_tokens=prediction.output_tokens,
+                failure_code=prediction.failure_code,
+                created_at=prediction.created_at,
+            )
+            self._session.add(row)
+            rows.append(row)
+        await self._session.flush()
+        return tuple(rows)
 
     async def due_deferred_cases(self, *, due_at: datetime, limit: int) -> list[RecoveryCase]:
         statement: Select[tuple[RecoveryCase]] = (

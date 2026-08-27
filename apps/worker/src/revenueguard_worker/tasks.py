@@ -7,6 +7,11 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Literal, TypedDict, cast
 
+from revenueguard_agents import (
+    AgentBudget,
+    BoundedCaseIntelligence,
+    OpenAICompatibleStructuredModel,
+)
 from revenueguard_domain import ActionType, RecoveryAction
 from revenueguard_integrations.execution import (
     ActionExecutionService,
@@ -32,11 +37,43 @@ from revenueguard_integrations.recovery import RecoveryApplicationService
 from sqlalchemy import select
 
 from revenueguard_worker.celery_app import celery_app
-from revenueguard_worker.config import get_worker_settings
+from revenueguard_worker.config import AgentModelProvider, WorkerSettings, get_worker_settings
+
+
+def _build_case_intelligence(worker_settings: WorkerSettings) -> BoundedCaseIntelligence:
+    model = None
+    if worker_settings.agent_model_provider is AgentModelProvider.OPENAI_COMPATIBLE:
+        if worker_settings.agent_model_base_url is None or worker_settings.agent_model_name is None:
+            raise AssertionError("validated OpenAI-compatible model settings are incomplete")
+        api_key = (
+            worker_settings.llm_api_key.get_secret_value()
+            if worker_settings.llm_api_key is not None
+            else None
+        )
+        model = OpenAICompatibleStructuredModel(
+            base_url=worker_settings.agent_model_base_url,
+            model_name=worker_settings.agent_model_name,
+            api_key=api_key,
+            response_mode=worker_settings.agent_model_response_mode,
+            token_limit_field=worker_settings.agent_model_token_limit_field,
+            timeout_seconds=worker_settings.agent_model_timeout_seconds,
+        )
+    return BoundedCaseIntelligence(
+        model,
+        budget=AgentBudget(
+            model_timeout_seconds=worker_settings.agent_model_timeout_seconds,
+            workflow_timeout_seconds=worker_settings.agent_workflow_timeout_seconds,
+            max_model_retries=worker_settings.agent_model_max_retries,
+            max_output_tokens=worker_settings.agent_model_max_output_tokens,
+            max_graph_steps=worker_settings.agent_graph_max_steps,
+        ),
+    )
+
 
 settings = get_worker_settings()
 engine = create_database_engine(settings.database_url, use_null_pool=True)
 session_factory = create_session_factory(engine)
+case_intelligence = _build_case_intelligence(settings)
 
 
 class PingResult(TypedDict):
@@ -233,6 +270,7 @@ async def _process_webhook_event(
         await RecoveryApplicationService(
             RecoveryRepository(session),
             action_repository=action_repository,
+            case_intelligence=case_intelligence,
         ).process_event(
             merchant_id=merchant_id,
             normalized_event_id=normalized.id,

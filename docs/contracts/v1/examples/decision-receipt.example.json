@@ -38,5 +38,9 @@
   "resulting_action_id": null,
   "resulting_state": "DEFERRED",
   "audit_entry_id": "audit_decision_001",
+  "model_prediction_ids": [
+    "prediction_case_subscription_001_diagnosis",
+    "prediction_case_subscription_001_ranking"
+  ],
   "created_at": "2026-08-25T04:31:03Z"
 }

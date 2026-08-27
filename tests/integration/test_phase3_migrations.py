@@ -1,4 +1,4 @@
-"""Isolated clean and incremental Alembic validation for Phase 3."""
+"""Isolated clean and incremental Alembic validation through the current phase."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ async def _drop_database(name: str) -> None:
         await engine.dispose()
 
 
-async def test_clean_and_0003_to_0004_migrations_are_isolated_and_current() -> None:
+async def test_clean_and_0003_to_head_migrations_are_isolated_and_current() -> None:
     probe = create_async_engine(DATABASE_URL)
     try:
         async with probe.connect() as connection:
@@ -88,7 +88,7 @@ async def test_clean_and_0003_to_0004_migrations_are_isolated_and_current() -> N
         clean_url = await _create_database(clean_name)
         _run_alembic(clean_url, "upgrade", "head")
         current = _run_alembic(clean_url, "current")
-        assert "0005_phase4_exactly_once_effects (head)" in current.stdout
+        assert "0006_phase5_agent_intelligence (head)" in current.stdout
         _run_alembic(clean_url, "check")
 
         incremental_url = await _create_database(incremental_name)
@@ -126,7 +126,8 @@ async def test_clean_and_0003_to_0004_migrations_are_isolated_and_current() -> N
                                 "WHERE NOT tgisinternal AND tgname IN "
                                 "('prevent_merchant_policy_versions_mutate', "
                                 "'prevent_case_transitions_mutate', "
-                                "'prevent_decision_receipts_mutate')"
+                                "'prevent_decision_receipts_mutate', "
+                                "'prevent_model_predictions_mutate')"
                             )
                         )
                     ).all()
@@ -135,6 +136,7 @@ async def test_clean_and_0003_to_0004_migrations_are_isolated_and_current() -> N
                     "prevent_merchant_policy_versions_mutate",
                     "prevent_case_transitions_mutate",
                     "prevent_decision_receipts_mutate",
+                    "prevent_model_predictions_mutate",
                 }
                 with pytest.raises(DBAPIError):
                     await session.execute(

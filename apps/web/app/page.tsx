@@ -52,7 +52,7 @@ const dependencyRows = [
   ["PostgreSQL", "Authoritative financial and workflow state", "Required"],
   ["Redis", "Queue, cache, rate limits, and coordination only", "Required"],
   ["Razorpay", "Signed Test Mode ingestion and payment-link execution", "Enabled in Phase 4"],
-  ["LLM", "Read-only bounded reasoning", "Disabled until Phase 5"],
+  ["LLM", "Read-only bounded reasoning with deterministic fallback", "Phase 5 enabled"],
 ] as const;
 
 export default function Home() {
@@ -71,22 +71,22 @@ export default function Home() {
             <a href="#boundaries">Boundaries</a>
             <a href="#verification">Verification</a>
           </div>
-          <a className="button button-on-dark" href="#system">
-            Inspect scaffold
+          <a className="button button-on-dark" href="/dashboard">
+            Open control room
           </a>
         </nav>
 
         <div id="top" className="hero-grid shell">
           <div className="hero-copy">
-            <span className="badge badge-dark">PHASE 04 · SAFE EFFECTS</span>
+            <span className="badge badge-dark">PHASE 05 · BOUNDED INTELLIGENCE</span>
             <h1 id="hero-title">A recovery system that refuses to guess.</h1>
             <p>
               RevenueGuard separates reasoning, authorization, execution, and verification so every
               financial claim has evidence behind it.
             </p>
             <div className="hero-actions">
-              <a className="button button-primary" href="#system">
-                View system
+              <a className="button button-primary" href="/dashboard">
+                View live system
               </a>
               <a className="button button-secondary-dark" href="#verification">
                 See test gates
@@ -119,8 +119,8 @@ export default function Home() {
             <span className="badge">SYSTEM FOUNDATION</span>
             <h2 id="system-title">Runtime pieces, without pretend outcomes.</h2>
             <p>
-              Phase 4 connects deterministic policy to a transactional action outbox, bounded Test
-              Mode execution, explicit unknown outcomes, and evidence-backed recovery accounting.
+              Phase 5 adds bounded diagnosis, strategy ranking, and explanation before deterministic
+              policy, while preserving transactional actions and verified recovery accounting.
             </p>
           </div>
           <div className="card-grid">
@@ -169,7 +169,7 @@ export default function Home() {
             <h2 id="verification-title">Every task ends with proof.</h2>
           </div>
           <div className="verification-card">
-            <p className="overline">PHASE 4 CHECK</p>
+            <p className="overline">PHASE 5 CHECK</p>
             <ul>
               <li>Format and lint both workspaces</li>
               <li>Type-check Python and TypeScript</li>
@@ -192,7 +192,7 @@ export default function Home() {
           </a>
           <p>Bounded recovery. Verified outcomes.</p>
         </div>
-        <p>Phase 4 effect control plane · Test Mode and verified outcomes only</p>
+        <p>Phase 5 bounded control plane · Test Mode and verified outcomes only</p>
       </footer>
     </main>
   );

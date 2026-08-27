@@ -2,7 +2,7 @@
 
 RevenueGuard is a bounded, event-driven revenue recovery control plane for Razorpay merchants. It is designed to detect revenue at risk, coordinate safe recovery decisions, apply deterministic merchant policy, execute approved actions idempotently, and count recovered money only after authoritative verification.
 
-> **Current status — Phase 4 complete:** deterministic policy now commits stable, idempotent action intents to PostgreSQL; workers execute Test Mode or explicitly simulated effects with bounded retries; ambiguous calls become `UNKNOWN`; and recovered revenue is counted only after authoritative provider evidence.
+> **Current status — Phase 5 complete:** bounded LangGraph case intelligence produces typed, versioned recommendations through read-only tools; malformed, unavailable, or slow model calls fall back deterministically; and merchant policy remains the sole authority before any durable action is created.
 
 ## Safety model
 
@@ -42,20 +42,21 @@ flowchart LR
     Verify --> Case
 ```
 
-Phase 4 extends the authenticated event path through durable action authorization, isolated execution, and authoritative outcome reconciliation without granting external-action authority to an LLM.
+Phase 5 inserts bounded diagnosis assistance, strategy generation, ranking, and explanation before the deterministic policy boundary. Model predictions are append-only PostgreSQL evidence linked to decision receipts; the Phase 4 outbox, execution, uncertainty, and verification guarantees remain unchanged.
 
 ## Current capabilities
 
-| Area     | Implemented                                                                                                     |
-| -------- | --------------------------------------------------------------------------------------------------------------- |
-| API      | Raw-body Razorpay HMAC verification, tenant resolution, durable acceptance/deduplication, and system endpoints   |
-| Worker   | Durable event and action dispatch, bounded explicit-failure retry, crash-to-`UNKNOWN`, reconciliation, and dead-letter retention |
-| Web      | Responsive Next.js operational dashboard based on the Coinbase design reference                                 |
-| Database | Merchant-scoped inbox, cases, decisions, action outbox, attempts, and append-only verified outcomes via Alembic |
-| Domain   | Typed cases, deterministic policy, stable action identity, explicit uncertainty, and verified outcome contracts |
-| Quality  | Ruff, mypy, pytest, ESLint, TypeScript, Vitest, Prettier, and production build gates                            |
-| Delivery | Six-mode webhook replay CLI plus the existing containers, locked dependencies, Make targets, and CI            |
-| Safety   | Calls are recorded before execution; incomplete calls are never blindly replayed; unverified outcomes count zero revenue |
+| Area     | Implemented                                                                                                                                         |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API      | Raw-body Razorpay HMAC verification, tenant resolution, durable acceptance/deduplication, and system endpoints                                      |
+| Worker   | Durable event and action dispatch, bounded explicit-failure retry, crash-to-`UNKNOWN`, reconciliation, and dead-letter retention                    |
+| Web      | Responsive Next.js operational dashboard based on the Coinbase design reference                                                                     |
+| Database | Merchant-scoped inbox, cases, model predictions, decisions, action outbox, attempts, and append-only verified outcomes via Alembic                  |
+| Domain   | Typed cases, deterministic policy, stable action identity, explicit uncertainty, and verified outcome contracts                                     |
+| Agents   | Typed six-step LangGraph, OpenAI-compatible cloud/local models, read-only tools, schema validation, redaction, budgets, and deterministic fallbacks |
+| Quality  | Ruff, mypy, pytest, ESLint, TypeScript, Vitest, Prettier, and production build gates                                                                |
+| Delivery | Six-mode webhook replay CLI plus the existing containers, locked dependencies, Make targets, and CI                                                 |
+| Safety   | Calls are recorded before execution; incomplete calls are never blindly replayed; unverified outcomes count zero revenue                            |
 
 ## Technology stack
 
@@ -142,6 +143,45 @@ make web
 | `http://localhost:8000/version`    | Service version and environment |
 
 The readiness endpoint returns HTTP `503` when PostgreSQL or Redis is unavailable.
+
+### Live operator dashboard
+
+The Phase 5 control room reads tenant-scoped state from PostgreSQL through the FastAPI dashboard
+API. It never reads financial state from browser storage. Configure independent server-side
+credentials in `.env`, then export that file in the web terminal so Next.js receives the same
+server-only values:
+
+```bash
+REVENUEGUARD_DASHBOARD_API_TOKEN=<high-entropy-internal-api-token>
+REVENUEGUARD_DASHBOARD_MERCHANT_ID=merchant_demo_001
+REVENUEGUARD_DASHBOARD_OPERATOR_ACCESS_KEY=<operator-access-key>
+REVENUEGUARD_DASHBOARD_SESSION_SECRET=<at-least-32-character-session-secret>
+```
+
+Then start the flow in separate terminals:
+
+```bash
+make infra-up
+make migrate
+make bootstrap-merchant MERCHANT_ID=merchant_demo_001
+make api
+```
+
+```bash
+make worker
+```
+
+```bash
+set -a
+source .env
+set +a
+make web
+```
+
+Open `http://localhost:3000/sign-in`, enter the configured operator access key, and replay a
+sanitized Test Mode fixture using the command in the Phase 5 section below. The dashboard refreshes
+every five seconds and exposes masked case references, state transitions, deterministic policy
+receipts, bounded model traces, human reviews, idempotent actions, and authoritative outcomes.
 
 ## Verification
 
@@ -233,6 +273,16 @@ The checked-in `.env.example` contains local, non-secret defaults. Important var
 - `REVENUEGUARD_REDIS_URL`
 - `REVENUEGUARD_CELERY_BROKER_URL`
 - `REVENUEGUARD_CELERY_RESULT_BACKEND`
+- `REVENUEGUARD_AGENT_MODEL_PROVIDER` (`DISABLED` or `OPENAI_COMPATIBLE`)
+- `REVENUEGUARD_AGENT_MODEL_BASE_URL`
+- `REVENUEGUARD_AGENT_MODEL_NAME`
+- `REVENUEGUARD_AGENT_MODEL_RESPONSE_MODE` (`JSON_SCHEMA` or `JSON_OBJECT`)
+- `REVENUEGUARD_AGENT_MODEL_TOKEN_LIMIT_FIELD` (`MAX_COMPLETION_TOKENS` or `MAX_TOKENS`)
+- `REVENUEGUARD_AGENT_MODEL_TIMEOUT_SECONDS`
+- `REVENUEGUARD_AGENT_WORKFLOW_TIMEOUT_SECONDS`
+- `REVENUEGUARD_AGENT_MODEL_MAX_RETRIES`
+- `REVENUEGUARD_AGENT_MODEL_MAX_OUTPUT_TOKENS`
+- `REVENUEGUARD_AGENT_GRAPH_MAX_STEPS`
 - `REVENUEGUARD_RAZORPAY_MERCHANT_ID`
 - `REVENUEGUARD_ACTION_PROVIDER` (`SIMULATOR` by default or `RAZORPAY_TEST`)
 - `REVENUEGUARD_ACTION_UNKNOWN_TTL_SECONDS`
@@ -244,6 +294,72 @@ merchant, a request with no routing header uses that merchant and still must pas
 signature verification. A supplied blank, unknown, or incorrect routing header fails closed.
 
 Razorpay, webhook, LLM, and contact-provider credentials must remain untracked. Do not add secrets to variables prefixed with `NEXT_PUBLIC_`, because those values may be exposed to the browser.
+
+### LangGraph model providers
+
+The worker defaults to `DISABLED`, which proves the complete graph and policy flow using the
+traceable deterministic fallback without making a network call. To use OpenAI, set these values
+in the ignored `.env` file and restart the worker:
+
+```dotenv
+REVENUEGUARD_AGENT_MODEL_PROVIDER=OPENAI_COMPATIBLE
+REVENUEGUARD_AGENT_MODEL_BASE_URL=https://api.openai.com/v1
+REVENUEGUARD_AGENT_MODEL_NAME=<a-model-id-supported-by-your-account>
+REVENUEGUARD_AGENT_MODEL_RESPONSE_MODE=JSON_SCHEMA
+REVENUEGUARD_AGENT_MODEL_TOKEN_LIMIT_FIELD=MAX_COMPLETION_TOKENS
+LLM_API_KEY=<server-side-api-key>
+```
+
+The same adapter works with servers that implement the OpenAI Chat Completions contract. Common
+local configurations are:
+
+| Server    | Base URL                    | Typical response mode                                                  | Token field  |
+| --------- | --------------------------- | ---------------------------------------------------------------------- | ------------ |
+| Ollama    | `http://localhost:11434/v1` | `JSON_OBJECT`                                                          | `MAX_TOKENS` |
+| LM Studio | `http://localhost:1234/v1`  | `JSON_OBJECT`                                                          | `MAX_TOKENS` |
+| vLLM      | `http://localhost:8001/v1`  | `JSON_SCHEMA` if the served model supports it, otherwise `JSON_OBJECT` | `MAX_TOKENS` |
+
+For a local server, set `REVENUEGUARD_AGENT_MODEL_NAME` to the exact served model name and leave
+`LLM_API_KEY` blank unless that server requires authentication. Port `8001` is shown for vLLM so
+it does not conflict with RevenueGuard's API on port `8000`. Provider/model support varies, so
+choose `JSON_OBJECT` when strict JSON Schema or `max_completion_tokens` is rejected. All returned
+objects still pass RevenueGuard's local Pydantic validation and deterministic safety checks.
+Remote model endpoints must use HTTPS; plain HTTP is accepted only for loopback local servers.
+
+Test the adapter and bounded graph without a real provider:
+
+```bash
+uv run --offline pytest -q tests/unit/test_openai_compatible_provider.py tests/unit/test_agent_intelligence.py apps/worker/tests/test_worker_config.py
+```
+
+For an end-to-end local flow, start infrastructure and migrations, start the configured model
+server, then run the API and worker in separate terminals. Replay a sanitized failed-payment
+fixture and inspect the append-only prediction records:
+
+```bash
+make infra-up
+make migrate
+make bootstrap-merchant MERCHANT_ID=merchant_demo_001
+make api
+```
+
+```bash
+make worker
+```
+
+```bash
+export RAZORPAY_WEBHOOK_SECRET='your-test-mode-webhook-secret'
+make replay-webhooks MODE=normal \
+  MERCHANT_ID=merchant_demo_001 \
+  FIXTURES='fixtures/razorpay/payment_failed.json'
+docker compose exec postgres psql -U revenueguard -d revenueguard -c \
+  "SELECT node, status, model_version, failure_code FROM model_predictions ORDER BY created_at DESC LIMIT 8;"
+```
+
+`SUCCEEDED` rows show that the configured model answered and passed validation. `FALLBACK` rows
+show that LangGraph ran safely but the model was disabled, unavailable, timed out, malformed, or
+rejected by a safety constraint. In either case, deterministic policy remains the only component
+that can authorize an outbox action.
 
 ## Project documentation
 

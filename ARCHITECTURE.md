@@ -147,6 +147,14 @@ load committed case context
 
 The graph has read-only tools. It cannot create a payment link, retry a payment, send a message, or mutate financial state directly.
 
+The structured-model boundary uses an operator-configured OpenAI-compatible
+`/v1/chat/completions` endpoint. Official OpenAI and compatible cloud services can use strict
+JSON Schema responses; local servers such as Ollama, LM Studio, and vLLM can select JSON Object
+mode and their supported token-limit field. Provider failure, timeout, invalid JSON, or schema
+rejection always returns the graph's deterministic fallback. The configured base URL and model
+name are trusted deployment configuration, never case input, and API credentials remain
+server-side secrets.
+
 ### 6.6 Portfolio intelligence
 
 - Aggregates recent success and failure behavior by merchant, payment method, issuer family, error family, and time window.

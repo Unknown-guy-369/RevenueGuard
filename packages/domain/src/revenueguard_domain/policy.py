@@ -364,6 +364,7 @@ class DecisionReceipt:
     human_review_id: str | None = None
     resulting_action_id: str | None = None
     audit_entry_id: str | None = None
+    model_prediction_ids: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -378,6 +379,10 @@ class DecisionReceipt:
             raise ValueError("receipt requires machine-readable reason codes")
         if len(set(self.policy_reason_codes)) != len(self.policy_reason_codes):
             raise ValueError("receipt reason codes must be unique")
+        if len(set(self.model_prediction_ids)) != len(self.model_prediction_ids) or any(
+            not prediction_id for prediction_id in self.model_prediction_ids
+        ):
+            raise ValueError("model prediction IDs must be non-empty and unique")
         object.__setattr__(self, "created_at", _utc("created_at", self.created_at))
 
     def to_dict(self) -> dict[str, object]:
@@ -398,6 +403,7 @@ class DecisionReceipt:
             "resulting_action_id": self.resulting_action_id,
             "resulting_state": self.resulting_state.value,
             "audit_entry_id": self.audit_entry_id,
+            "model_prediction_ids": list(self.model_prediction_ids),
             "created_at": _format(self.created_at),
         }
 

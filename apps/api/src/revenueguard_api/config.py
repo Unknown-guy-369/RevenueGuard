@@ -32,6 +32,7 @@ class Settings(BaseSettings):
         validation_alias="RAZORPAY_WEBHOOK_SECRET",
     )
     event_dispatch_max_attempts: int = Field(default=5, ge=1, le=20)
+    dashboard_api_token: SecretStr | None = None
     database_url: str = "postgresql+asyncpg://revenueguard:revenueguard@localhost:5432/revenueguard"
     redis_url: str = "redis://localhost:6379/0"
 

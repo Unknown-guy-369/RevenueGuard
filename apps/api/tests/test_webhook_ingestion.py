@@ -391,7 +391,7 @@ async def test_durable_inbox_failure_does_not_acknowledge_event(
     assert ingestion.verified == []
 
 
-async def test_openapi_documents_webhook_contract_and_phase_two_description(
+async def test_openapi_documents_webhook_contract_and_current_safety_description(
     resolved_merchant: ResolvedMerchant,
 ) -> None:
     resolver = FakeMerchantResolver(resolved_merchant)
@@ -400,7 +400,8 @@ async def test_openapi_documents_webhook_contract_and_phase_two_description(
     async with make_client(resolver, ingestion) as client:
         document = (await client.get("/openapi.json")).json()
 
-    assert "Phase 2" in document["info"]["description"]
+    assert "signed Test Mode events" in document["info"]["description"]
+    assert "Models never authorize actions" in document["info"]["description"]
     operation = document["paths"][WEBHOOK_PATH]["post"]
     header_names = {
         parameter["name"] for parameter in operation["parameters"] if parameter["in"] == "header"

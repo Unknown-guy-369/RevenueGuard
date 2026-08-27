@@ -9,6 +9,12 @@ from hashlib import sha256
 from typing import Final
 from uuid import uuid4
 
+from revenueguard_agents import (
+    BoundedCaseIntelligence,
+    CaseIntelligence,
+    CaseIntelligenceRequest,
+    EvidenceItem,
+)
 from revenueguard_domain import (
     ActionFingerprintInput,
     ActionStatus,
@@ -50,7 +56,7 @@ from revenueguard_integrations.persistence import (
     order_evidence,
 )
 
-APPLICATION_VERSION: Final = "0.1.0-phase4"
+APPLICATION_VERSION: Final = "0.1.0-phase5"
 _PAID_STATUSES: Final = frozenset({"CAPTURED", "CHARGED", "COMPLETED", "PAID"})
 _CANCELLED_STATUSES: Final = frozenset({"CANCELLED", "HALTED"})
 
@@ -78,6 +84,7 @@ class RecoveryApplicationService:
         repository: RecoveryRepository,
         *,
         action_repository: ActionRepository | None = None,
+        case_intelligence: CaseIntelligence | None = None,
         clock: Clock | None = None,
         id_generator: IdGenerator | None = None,
         application_version: str = APPLICATION_VERSION,
@@ -95,6 +102,7 @@ class RecoveryApplicationService:
                 self._action_repository = ActionRepository(repository_session)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._id_generator = id_generator or _new_id
+        self._case_intelligence = case_intelligence or BoundedCaseIntelligence()
         self._application_version = application_version
         self._review_ttl = review_ttl
 
@@ -502,6 +510,24 @@ class RecoveryApplicationService:
         evaluated_at: datetime,
         approval: HumanReviewRequest | None,
     ) -> RecoveryServiceResult:
+        intelligence = await self._case_intelligence.recommend(
+            self._intelligence_request(
+                case=case,
+                diagnosis=diagnosis,
+                event_row=event_row,
+                evaluated_at=evaluated_at,
+            )
+        )
+        advisory_diagnosis = Diagnosis(
+            code=diagnosis.code if diagnosis.terminal else intelligence.diagnosis_code,
+            confidence_basis_points=min(
+                diagnosis.confidence_basis_points,
+                intelligence.confidence_basis_points,
+            ),
+            candidates=intelligence.candidates,
+            defer_until=diagnosis.defer_until,
+            terminal=diagnosis.terminal,
+        )
         checking = await self._transition(
             case=case,
             to_state=CaseState.POLICY_CHECK,
@@ -510,7 +536,7 @@ class RecoveryApplicationService:
             correlation_id=event_row.correlation_id,
             policy=policy,
             occurred_at=evaluated_at,
-            diagnosis=diagnosis,
+            diagnosis=advisory_diagnosis,
             latest_event=_event_from_row(event_row),
         )
         consent, opted_out = await self._repository.consent_facts(
@@ -530,11 +556,11 @@ class RecoveryApplicationService:
             case_id=case.case_id,
             amount_minor=case.revenue_at_risk_minor,
             currency=case.currency,
-            confidence_basis_points=diagnosis.confidence_basis_points,
+            confidence_basis_points=advisory_diagnosis.confidence_basis_points,
             retry_count=case.retry_count,
             contact_count=case.contact_count,
             evaluated_at=evaluated_at,
-            candidates=diagnosis.candidates,
+            candidates=advisory_diagnosis.candidates,
             evidence_references=(event_row.id,),
             consent_by_channel=consent,
             opted_out_channels=opted_out,
@@ -542,11 +568,11 @@ class RecoveryApplicationService:
             already_paid=status in _PAID_STATUSES,
             disputed=(status == "DISPUTED" or diagnosis.code == "PAYMENT_DISPUTED"),
             cancelled=status in _CANCELLED_STATUSES,
-            diagnosis_defer_until=diagnosis.defer_until,
+            diagnosis_defer_until=advisory_diagnosis.defer_until,
             approval=approval,
             unknown_equivalent_action=await self._has_unknown_equivalent(
                 case=checking,
-                candidates=diagnosis.candidates,
+                candidates=advisory_diagnosis.candidates,
             ),
         )
         decision = evaluate_policy(policy, evaluation)
@@ -588,21 +614,29 @@ class RecoveryApplicationService:
             merchant_id=case.merchant_id,
             correlation_id=event_row.correlation_id,
             evidence_references=evaluation.evidence_references,
-            candidate_actions=diagnosis.candidates,
+            candidate_actions=advisory_diagnosis.candidates,
             selected_action_type=decision.selected_action.action_type,
-            explanation="Policy evaluation: " + ",".join(decision.reason_codes),
+            explanation=(
+                intelligence.explanation + " Policy evaluation: " + ",".join(decision.reason_codes)
+            ),
             policy_result=decision.result,
             policy_reason_codes=decision.reason_codes,
             versions=VersionBundle(
                 policy=policy.version,
-                features=policy.features_version,
+                features=intelligence.feature_version,
                 application=self._application_version,
+                model=intelligence.model_version,
+                prompt=intelligence.prompt_version,
             ),
             created_at=evaluated_at,
             resulting_state=decided_case.state,
             human_review_id=review.review_id if review else None,
             resulting_action_id=action.action_id if action else None,
+            model_prediction_ids=tuple(
+                prediction.prediction_id for prediction in intelligence.predictions
+            ),
         )
+        await self._repository.store_model_predictions(intelligence.predictions)
         await self._repository.store_receipt(receipt)
         if action is not None:
             if self._action_repository is None:
@@ -623,6 +657,54 @@ class RecoveryApplicationService:
             receipt_id=receipt.receipt_id,
             review_id=review.review_id if review else None,
             action_id=action.action_id if action else None,
+        )
+
+    @staticmethod
+    def _intelligence_request(
+        *,
+        case: RecoveryCase,
+        diagnosis: Diagnosis,
+        event_row: NormalizedEvent,
+        evaluated_at: datetime,
+    ) -> CaseIntelligenceRequest:
+        material = ":".join(
+            (
+                case.case_id,
+                event_row.correlation_id,
+                str(case.state_version),
+                evaluated_at.isoformat(),
+            )
+        )
+        return CaseIntelligenceRequest(
+            run_id=f"intelligence_{sha256(material.encode()).hexdigest()[:32]}",
+            case_id=case.case_id,
+            merchant_id=case.merchant_id,
+            correlation_id=event_row.correlation_id,
+            workflow_type=case.workflow_type,
+            subject_type=case.subject_type,
+            target=diagnosis.candidates[0].target,
+            amount_minor=case.revenue_at_risk_minor,
+            currency=case.currency,
+            diagnosis_code=diagnosis.code,
+            diagnosis_confidence_basis_points=diagnosis.confidence_basis_points,
+            candidates=diagnosis.candidates,
+            retry_count=case.retry_count,
+            contact_count=case.contact_count,
+            evidence=(
+                EvidenceItem(
+                    reference=event_row.id,
+                    event_type=event_row.event_type,
+                    failure_category=event_row.normalized_failure_category,
+                    summary=(
+                        "A normalized provider event reports "
+                        f"{event_row.normalized_failure_category} for this case."
+                    ),
+                    occurred_at=event_row.occurred_at,
+                ),
+            ),
+            feature_version="phase5-case-features-1.0",
+            evaluated_at=evaluated_at,
+            terminal_diagnosis=diagnosis.terminal,
         )
 
     async def _has_unknown_equivalent(
