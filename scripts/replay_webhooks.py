@@ -10,6 +10,7 @@ from pathlib import Path
 
 from revenueguard_evaluation.webhook_replay import (
     ReplayMode,
+    load_fixture_dataset,
     load_fixtures,
     make_http_sender,
     plan_replay,
@@ -20,7 +21,12 @@ from revenueguard_evaluation.webhook_replay import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=[mode.value for mode in ReplayMode])
-    parser.add_argument("fixtures", nargs="+", type=Path)
+    parser.add_argument("fixtures", nargs="*", type=Path)
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        help="Synthetic dataset manifest containing fixture payload filenames",
+    )
     parser.add_argument(
         "--endpoint",
         default="http://localhost:8000/api/v1/webhooks/razorpay",
@@ -40,7 +46,14 @@ def main() -> int:
         raise SystemExit("RAZORPAY_WEBHOOK_SECRET must be set; secrets are not accepted on the CLI")
 
     mode = ReplayMode(args.mode)
-    fixtures = load_fixtures(args.fixtures)
+    if args.dataset is not None and args.fixtures:
+        raise SystemExit("use either positional fixtures or --dataset, not both")
+    fixture_paths = (
+        load_fixture_dataset(args.dataset) if args.dataset is not None else tuple(args.fixtures)
+    )
+    if not fixture_paths:
+        raise SystemExit("at least one fixture or --dataset is required")
+    fixtures = load_fixtures(fixture_paths)
     plan = plan_replay(
         fixtures,
         mode,

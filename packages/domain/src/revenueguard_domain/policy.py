@@ -280,6 +280,8 @@ class PolicyEvaluationInput:
     approval: HumanReviewRequest | None = None
     unknown_equivalent_action: bool = False
     customer_contact_in_progress: bool = False
+    active_promise_to_pay: bool = False
+    promise_due_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.case_id or not self.currency:
@@ -314,6 +316,16 @@ class PolicyEvaluationInput:
             raise TypeError("unknown_equivalent_action must be a boolean")
         if not isinstance(self.customer_contact_in_progress, bool):
             raise TypeError("customer_contact_in_progress must be a boolean")
+        if not isinstance(self.active_promise_to_pay, bool):
+            raise TypeError("active_promise_to_pay must be a boolean")
+        if self.promise_due_at is not None:
+            object.__setattr__(
+                self,
+                "promise_due_at",
+                _utc("promise_due_at", self.promise_due_at),
+            )
+        if self.active_promise_to_pay and self.promise_due_at is None:
+            raise ValueError("active promise requires promise_due_at")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -508,6 +520,9 @@ def _evaluate_candidate(
         and action_class not in ALWAYS_ALLOWED_CLASSES
     ):
         return PolicyResult.SKIP, "ACTION_NOT_ALLOWED", None
+    if candidate.action_type is ActionType.ESCALATE_HUMAN:
+        # Escalation is a workflow state, never an executable provider action.
+        return PolicyResult.REQUIRE_HUMAN, "AGENT_ESCALATION_REQUESTED", None
     if action_class is ActionClass.RETRY and evaluation.retry_count >= policy.retry_limit:
         return PolicyResult.SKIP, "RETRY_LIMIT_REACHED", None
     if action_class is ActionClass.CUSTOMER_CONTACT:
@@ -537,6 +552,17 @@ def _evaluate_candidate(
             "EQUIVALENT_ACTION_OUTCOME_UNKNOWN",
             evaluation.evaluated_at + timedelta(seconds=policy.default_defer_seconds),
         )
+    if (
+        evaluation.active_promise_to_pay
+        and candidate.action_type is not ActionType.SCHEDULE_PROMISE_REMINDER
+        and action_class
+        in {
+            ActionClass.RETRY,
+            ActionClass.MONEY_INTENT,
+            ActionClass.CUSTOMER_CONTACT,
+        }
+    ):
+        return PolicyResult.DEFER, "ACTIVE_PROMISE_TO_PAY", evaluation.promise_due_at
     matching_incidents = tuple(
         incident
         for incident in evaluation.incidents
@@ -548,6 +574,15 @@ def _evaluate_candidate(
             "ACTIVE_INCIDENT",
             min(incident.ends_at for incident in matching_incidents),
         )
+    if (
+        candidate.action_type is ActionType.DEFER_RETRY
+        and evaluation.confidence_basis_points < policy.minimum_confidence_basis_points
+        and not _approval_matches(policy, evaluation, candidate)
+    ):
+        wake = evaluation.diagnosis_defer_until
+        if wake is None or wake <= evaluation.evaluated_at:
+            wake = evaluation.evaluated_at + timedelta(seconds=policy.default_defer_seconds)
+        return PolicyResult.DEFER, "LOW_CONFIDENCE_RETRY_DEFERRED", wake
     if (
         evaluation.diagnosis_defer_until
         and evaluation.evaluated_at < evaluation.diagnosis_defer_until

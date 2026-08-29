@@ -36,11 +36,13 @@ from revenueguard_integrations.persistence.models import (
     CommunicationConsent,
     DecisionReceipt,
     HumanReview,
+    Invoice,
     Merchant,
     MerchantPolicyVersion,
     NormalizedEvent,
     Payment,
     PortfolioIncident,
+    PromiseToPay,
     RecoveryCase,
     RecoveryCaseEvent,
     Subscription,
@@ -83,6 +85,7 @@ class EvidenceLinkResult:
 class AuthoritativeFacts:
     provider_updated_at: datetime | None
     status: str | None
+    promise_due_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,7 +244,6 @@ class RecoveryRepository:
         merchant_id: str,
         workflow_type: str,
         subject_type: str,
-        subject_id: str,
         recovery_episode_key: str,
     ) -> RecoveryCase | None:
         return (
@@ -250,7 +252,6 @@ class RecoveryRepository:
                     RecoveryCase.merchant_id == merchant_id,
                     RecoveryCase.workflow_type == workflow_type,
                     RecoveryCase.subject_type == subject_type,
-                    RecoveryCase.subject_id == subject_id,
                     RecoveryCase.recovery_episode_key == recovery_episode_key,
                 )
             )
@@ -642,6 +643,11 @@ class RecoveryRepository:
                 merchant_id=event.merchant_id,
                 payment_id=event.payment_id,
             )
+        if event.invoice_id is not None:
+            return await self._invoice_facts(
+                merchant_id=event.merchant_id,
+                invoice_id=event.invoice_id,
+            )
         return AuthoritativeFacts(None, None)
 
     async def authoritative_facts_for_case(
@@ -661,6 +667,11 @@ class RecoveryRepository:
             return await self._payment_facts(
                 merchant_id=merchant_id,
                 payment_id=case.subject_id,
+            )
+        if case.subject_type is SubjectType.INVOICE:
+            return await self._invoice_facts(
+                merchant_id=merchant_id,
+                invoice_id=case.subject_id,
             )
         return AuthoritativeFacts(None, None)
 
@@ -696,6 +707,27 @@ class RecoveryRepository:
     ) -> AuthoritativeFacts:
         row = await self._session.get(Subscription, (merchant_id, subscription_id))
         return _provider_facts(row)
+
+    async def _invoice_facts(
+        self,
+        *,
+        merchant_id: str,
+        invoice_id: str,
+    ) -> AuthoritativeFacts:
+        row = await self._session.get(Invoice, (merchant_id, invoice_id))
+        if row is None:
+            return AuthoritativeFacts(None, None)
+        promise_due_at = await self._session.scalar(
+            select(PromiseToPay.promised_for)
+            .where(
+                PromiseToPay.merchant_id == merchant_id,
+                PromiseToPay.invoice_id == invoice_id,
+                PromiseToPay.status == "ACTIVE",
+            )
+            .order_by(PromiseToPay.promised_for.desc())
+            .limit(1)
+        )
+        return AuthoritativeFacts(row.provider_updated_at, row.status, promise_due_at)
 
 
 def order_evidence(

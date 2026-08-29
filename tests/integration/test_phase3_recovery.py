@@ -111,9 +111,11 @@ async def _seed_failure_event(
     *,
     merchant_id: str,
     event_id: str = "event_failure_001",
-    subscription_id: str = "subscription_001",
+    subscription_id: str | None = "subscription_001",
     payment_id: str = "payment_001",
+    order_id: str | None = None,
     occurred_at: datetime = NOW,
+    normalized_failure_category: str = "INSUFFICIENT_FUNDS",
 ) -> NormalizedEvent:
     async with factory.begin() as session:
         repository = EventIngestionRepository(session)
@@ -128,24 +130,25 @@ async def _seed_failure_event(
             payment_id=payment_id,
             provider_payment_id=payment_id,
             customer_id="customer_001",
-            order_id=None,
+            order_id=order_id,
             amount_minor=10_000,
             currency="INR",
             status="FAILED",
             provider_occurred_at=occurred_at,
             provider_updated_at=occurred_at,
         )
-        await repository.upsert_subscription(
-            merchant_id=merchant_id,
-            subscription_id=subscription_id,
-            provider_subscription_id=subscription_id,
-            customer_id="customer_001",
-            amount_minor=10_000,
-            currency="INR",
-            status="PENDING",
-            provider_occurred_at=occurred_at,
-            provider_updated_at=occurred_at,
-        )
+        if subscription_id is not None:
+            await repository.upsert_subscription(
+                merchant_id=merchant_id,
+                subscription_id=subscription_id,
+                provider_subscription_id=subscription_id,
+                customer_id="customer_001",
+                amount_minor=10_000,
+                currency="INR",
+                status="PENDING",
+                provider_occurred_at=occurred_at,
+                provider_updated_at=occurred_at,
+            )
         inbox = await repository.record_webhook(
             event_id=str(uuid4()),
             merchant_id=merchant_id,
@@ -171,14 +174,14 @@ async def _seed_failure_event(
                 "received_at": occurred_at,
                 "customer_id": "customer_001",
                 "payment_id": payment_id,
-                "order_id": None,
+                "order_id": order_id,
                 "subscription_id": subscription_id,
                 "invoice_id": None,
                 "payment_link_id": None,
                 "amount_minor": 10_000,
                 "currency": "INR",
                 "failure_code": "BAD_REQUEST_ERROR",
-                "normalized_failure_category": "INSUFFICIENT_FUNDS",
+                "normalized_failure_category": normalized_failure_category,
                 "correlation_id": f"correlation_{event_id}",
                 "causation_id": None,
                 "source_payload_reference": f"webhook_events/{inbox.event.id}",
@@ -410,6 +413,112 @@ async def test_recovery_service_is_atomic_and_replay_idempotent_when_policy_defe
         case = (await session.scalars(select(RecoveryCase))).one()
         assert case.state == CaseState.DEFERRED.value
         assert case.state != CaseState.EXECUTING.value
+        assert await session.scalar(select(func.count()).select_from(RecoveryActionRow)) == 0
+
+
+async def test_payment_attempts_for_one_order_share_one_deferred_recovery_case(
+    phase3_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    merchant_id = "merchant_order_coordination"
+    await _seed_merchant(phase3_factory, merchant_id)
+    first_event = await _seed_failure_event(
+        phase3_factory,
+        merchant_id=merchant_id,
+        event_id="event_order_attempt_001",
+        subscription_id=None,
+        payment_id="payment_attempt_001",
+        order_id="order_shared_001",
+        normalized_failure_category="UNKNOWN",
+    )
+    second_event = await _seed_failure_event(
+        phase3_factory,
+        merchant_id=merchant_id,
+        event_id="event_order_attempt_002",
+        subscription_id=None,
+        payment_id="payment_attempt_002",
+        order_id="order_shared_001",
+        occurred_at=NOW + timedelta(seconds=1),
+        normalized_failure_category="UNKNOWN",
+    )
+    ids = iter(("case_order", "receipt_order_001", "receipt_order_002"))
+    async with phase3_factory.begin() as session:
+        service = RecoveryApplicationService(
+            RecoveryRepository(session),
+            clock=lambda: NOW,
+            id_generator=lambda _prefix: next(ids),
+        )
+        first = await service.process_event(
+            merchant_id=merchant_id,
+            normalized_event_id=first_event.id,
+        )
+        second = await service.process_event(
+            merchant_id=merchant_id,
+            normalized_event_id=second_event.id,
+        )
+
+        assert first.case_id == "case_order"
+        assert second.case_id == "case_order"
+        assert first.case_state is CaseState.DEFERRED
+        assert second.case_state is CaseState.DEFERRED
+        assert first.review_id is None
+        assert second.review_id is None
+        assert first.action_id is None
+        assert second.action_id is None
+
+    async with phase3_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(RecoveryCase)) == 1
+        assert await session.scalar(select(func.count()).select_from(RecoveryCaseEvent)) == 2
+        assert await session.scalar(select(func.count()).select_from(DecisionReceipt)) == 2
+        assert await session.scalar(select(func.count()).select_from(HumanReview)) == 0
+        assert await session.scalar(select(func.count()).select_from(RecoveryActionRow)) == 0
+        case = (await session.scalars(select(RecoveryCase))).one()
+        assert case.retry_count == 2
+        assert case.next_evaluation_at == NOW + timedelta(minutes=15, seconds=1)
+
+
+async def test_bounded_unknown_retries_escalate_to_review_without_an_executable_action(
+    phase3_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    merchant_id = "merchant_bounded_escalation"
+    await _seed_merchant(phase3_factory, merchant_id)
+    policy = replace(
+        conservative_default_policy(),
+        version="bounded-escalation-test",
+        effective_at=NOW - timedelta(hours=1),
+        retry_limit=0,
+    )
+    async with phase3_factory.begin() as session:
+        await RecoveryRepository(session).publish_policy(
+            merchant_id=merchant_id,
+            policy=policy,
+            published_by="TEST",
+        )
+    event = await _seed_failure_event(
+        phase3_factory,
+        merchant_id=merchant_id,
+        subscription_id=None,
+        normalized_failure_category="UNKNOWN",
+    )
+    ids = iter(("case_bounded", "review_bounded", "receipt_bounded"))
+    async with phase3_factory.begin() as session:
+        result = await RecoveryApplicationService(
+            RecoveryRepository(session),
+            clock=lambda: NOW,
+            id_generator=lambda _prefix: next(ids),
+        ).process_event(
+            merchant_id=merchant_id,
+            normalized_event_id=event.id,
+        )
+
+        assert result.case_state is CaseState.ESCALATED
+        assert result.review_id == "review_bounded"
+        assert result.action_id is None
+        assert result.reason_code == "AGENT_ESCALATION_REQUESTED"
+
+    async with phase3_factory() as session:
+        review = (await session.scalars(select(HumanReview))).one()
+        assert review.proposed_action_type == ActionType.ESCALATE_HUMAN.value
+        assert review.reason_code == "AGENT_ESCALATION_REQUESTED"
         assert await session.scalar(select(func.count()).select_from(RecoveryActionRow)) == 0
 
 

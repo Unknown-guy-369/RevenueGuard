@@ -1,18 +1,25 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Sora, Source_Sans_3, IBM_Plex_Mono } from "next/font/google";
 
 import "./globals.css";
 
-const sans = Inter({
+const sans = Source_Sans_3({
   subsets: ["latin"],
   display: "swap",
-  variable: "--font-sans",
+  variable: "--font-source-sans",
 });
 
-const mono = JetBrains_Mono({
+const mono = IBM_Plex_Mono({
+  weight: ["400", "500", "600"],
   subsets: ["latin"],
   display: "swap",
-  variable: "--font-mono",
+  variable: "--font-ibm-plex-mono",
+});
+
+const sora = Sora({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-sora",
 });
 
 export const metadata: Metadata = {
@@ -31,7 +38,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable}`} data-scroll-behavior="smooth">
+    <html
+      lang="en"
+      className={`${sans.variable} ${mono.variable} ${sora.variable}`}
+      data-scroll-behavior="smooth"
+    >
       <body>{children}</body>
     </html>
   );

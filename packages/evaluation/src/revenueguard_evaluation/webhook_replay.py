@@ -69,6 +69,43 @@ class ReplaySummary:
 
 Sender = Callable[[ReplayDelivery], ReplayResponse]
 Sleeper = Callable[[float], None]
+_MAX_DATASET_FIXTURES = 100
+
+
+def load_fixture_dataset(manifest_path: Path) -> tuple[Path, ...]:
+    """Resolve a bounded, explicitly synthetic webhook dataset manifest."""
+
+    try:
+        document = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"dataset manifest is unreadable: {manifest_path}") from error
+    if not isinstance(document, dict):
+        raise ValueError("dataset manifest must contain a JSON object")
+    if document.get("classification") != "SYNTHETIC":
+        raise ValueError("dataset manifest must be explicitly classified SYNTHETIC")
+    entries = document.get("fixtures")
+    if not isinstance(entries, list) or not 1 <= len(entries) <= _MAX_DATASET_FIXTURES:
+        raise ValueError("dataset fixtures must contain between 1 and 100 entries")
+
+    fixture_paths: list[Path] = []
+    seen_payloads: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("each dataset fixture entry must be an object")
+        payload = entry.get("payload")
+        if not isinstance(payload, str) or not payload:
+            raise ValueError("each dataset fixture entry requires a payload filename")
+        relative_path = Path(payload)
+        if relative_path.name != payload or relative_path.suffix != ".json":
+            raise ValueError("dataset payloads must be local JSON filenames")
+        if payload in seen_payloads:
+            raise ValueError(f"dataset payload is duplicated: {payload}")
+        fixture_path = manifest_path.parent / relative_path
+        if not fixture_path.is_file():
+            raise ValueError(f"dataset fixture does not exist: {fixture_path}")
+        seen_payloads.add(payload)
+        fixture_paths.append(fixture_path)
+    return tuple(fixture_paths)
 
 
 def _fixture_event_id(path: Path, raw_body: bytes) -> str:

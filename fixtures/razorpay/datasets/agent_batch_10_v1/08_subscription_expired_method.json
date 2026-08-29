@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "subscription.pending",
+  "contains": ["subscription", "payment"],
+  "payload": {
+    "subscription": {
+      "entity": {
+        "id": "sub_agent_batch_08",
+        "entity": "subscription",
+        "customer_id": "customer_agent_batch_08",
+        "status": "pending",
+        "created_at": 1787890200
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_08",
+        "entity": "payment",
+        "amount": 89900,
+        "currency": "INR",
+        "status": "failed",
+        "customer_id": "customer_agent_batch_08",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "Synthetic recurring payment method has expired.",
+        "error_reason": "expired_card",
+        "created_at": 1787893619
+      }
+    }
+  },
+  "created_at": 1787893620
+}

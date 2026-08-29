@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "subscription.halted",
+  "contains": ["subscription", "payment"],
+  "payload": {
+    "subscription": {
+      "entity": {
+        "id": "sub_agent_batch_06",
+        "entity": "subscription",
+        "customer_id": "customer_agent_batch_06",
+        "status": "halted",
+        "created_at": 1787890000
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_06",
+        "entity": "payment",
+        "amount": 399900,
+        "currency": "INR",
+        "status": "failed",
+        "customer_id": "customer_agent_batch_06",
+        "error_code": "SERVER_ERROR",
+        "error_description": "Synthetic issuer was temporarily unavailable.",
+        "error_reason": "issuer_unavailable",
+        "created_at": 1787893499
+      }
+    }
+  },
+  "created_at": 1787893500
+}

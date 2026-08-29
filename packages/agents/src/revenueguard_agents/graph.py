@@ -38,6 +38,10 @@ from revenueguard_agents.contracts import (
     StructuredModel,
 )
 from revenueguard_agents.redaction import redact_model_payload
+from revenueguard_agents.tracing import (
+    CaseIntelligenceTracer,
+    DisabledCaseIntelligenceTracer,
+)
 
 OutputT = TypeVar("OutputT", bound=BaseModel)
 
@@ -136,6 +140,7 @@ class BoundedCaseIntelligence:
         prompt_version: str = DEFAULT_PROMPT_VERSION,
         schema_version: str = AGENT_SCHEMA_VERSION,
         tools_factory: Callable[[CaseIntelligenceRequest], ReadOnlyCaseTools] | None = None,
+        tracer: CaseIntelligenceTracer | None = None,
     ) -> None:
         if not prompt_version or not schema_version:
             raise ValueError("prompt and schema versions are required")
@@ -144,19 +149,29 @@ class BoundedCaseIntelligence:
         self._prompt_version = prompt_version
         self._schema_version = schema_version
         self._tools_factory = tools_factory or _RequestTools
+        self._tracer = tracer or DisabledCaseIntelligenceTracer()
 
     async def recommend(self, request: CaseIntelligenceRequest) -> CaseIntelligenceResult:
+        with self._tracer.case_run(request) as trace_run:
+            result = await self._recommend_untraced(request)
+            trace_run.record_result(result)
+            return result
+
+    async def _recommend_untraced(self, request: CaseIntelligenceRequest) -> CaseIntelligenceResult:
         tools = self._tools_factory(request)
         graph = self._build_graph(tools)
         try:
-            async with asyncio.timeout(self._budget.workflow_timeout_seconds):
-                state = cast(
-                    _GraphState,
-                    await graph.ainvoke(
-                        {"request": request, "predictions": (), "fallback_used": False},
-                        config={"recursion_limit": self._budget.max_graph_steps},
-                    ),
-                )
+            # Do not let LangGraph auto-trace its full state. The enclosing tracer records only
+            # a reviewed projection with no merchant/case identifiers, prompts, or evidence text.
+            with self._tracer.suppress_automatic_child_traces():
+                async with asyncio.timeout(self._budget.workflow_timeout_seconds):
+                    state = cast(
+                        _GraphState,
+                        await graph.ainvoke(
+                            {"request": request, "predictions": (), "fallback_used": False},
+                            config={"recursion_limit": self._budget.max_graph_steps},
+                        ),
+                    )
         except TimeoutError:
             return self._graph_fallback(request, "GRAPH_TIMEOUT")
         except Exception:

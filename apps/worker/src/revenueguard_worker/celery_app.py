@@ -10,7 +10,7 @@ celery_app = Celery(
     "revenueguard",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
-    include=["revenueguard_worker.tasks"],
+    include=["revenueguard_worker.tasks", "revenueguard_worker.playbook_tasks"],
 )
 
 celery_app.conf.update(
@@ -36,6 +36,10 @@ celery_app.conf.update(
             "task": "revenueguard.actions.reconcile_unknown",
             "schedule": 30.0,
         },
+        "maintain-durable-promises": {
+            "task": "revenueguard.playbooks.maintain_promises",
+            "schedule": 60.0,
+        },
     },
     task_routes={
         "revenueguard.events.dispatch_pending": {"queue": "event_dispatch"},
@@ -43,5 +47,6 @@ celery_app.conf.update(
         "revenueguard.actions.dispatch_pending": {"queue": "action_dispatch"},
         "revenueguard.actions.execute": {"queue": "action_execution"},
         "revenueguard.actions.reconcile_unknown": {"queue": "action_reconciliation"},
+        "revenueguard.playbooks.maintain_promises": {"queue": "playbook_maintenance"},
     },
 )

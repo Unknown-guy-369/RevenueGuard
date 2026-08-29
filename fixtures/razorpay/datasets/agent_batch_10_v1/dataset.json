@@ -1,0 +1,118 @@
+{
+  "classification": "SYNTHETIC",
+  "schema_version": "1.0",
+  "dataset_type": "RAZORPAY_WEBHOOK_BATCH",
+  "description": "Ten independent synthetic Razorpay-shaped failures for concurrent RevenueGuard case-intelligence and LangSmith trace testing.",
+  "fixtures": [
+    {
+      "payload": "01_b2b_insufficient_funds.json",
+      "expected": {
+        "event_type": "payment.failed",
+        "failure_category": "INSUFFICIENT_FUNDS",
+        "workflow_type": "B2B_PROMISE_TO_PAY",
+        "subject_type": "INVOICE",
+        "diagnosis_code": "TEMPORARY_INSUFFICIENT_FUNDS",
+        "candidate_action_types": ["DEFER_RETRY", "REQUEST_PAYMENT_METHOD_UPDATE", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "02_payment_expired_method.json",
+      "expected": {
+        "event_type": "payment.failed",
+        "failure_category": "EXPIRED_PAYMENT_METHOD",
+        "workflow_type": "PAYMENT_DEGRADATION",
+        "subject_type": "PAYMENT",
+        "diagnosis_code": "EXPIRED_PAYMENT_METHOD",
+        "candidate_action_types": ["REQUEST_PAYMENT_METHOD_UPDATE", "CREATE_PAYMENT_LINK", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "03_b2b_authentication_required.json",
+      "expected": {
+        "event_type": "payment.failed",
+        "failure_category": "AUTHENTICATION_FAILURE",
+        "workflow_type": "B2B_PROMISE_TO_PAY",
+        "subject_type": "INVOICE",
+        "diagnosis_code": "PAYMENT_AUTHENTICATION_REQUIRED",
+        "candidate_action_types": ["REQUEST_PAYMENT_METHOD_UPDATE", "CREATE_PAYMENT_LINK", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "04_payment_customer_action.json",
+      "expected": {
+        "event_type": "payment.failed",
+        "failure_category": "CUSTOMER_ACTION_REQUIRED",
+        "workflow_type": "PAYMENT_DEGRADATION",
+        "subject_type": "PAYMENT",
+        "diagnosis_code": "CUSTOMER_ACTION_REQUIRED",
+        "candidate_action_types": ["REQUEST_PAYMENT_METHOD_UPDATE", "SEND_REMINDER", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "05_payment_gateway_unavailable.json",
+      "expected": {
+        "event_type": "payment.failed",
+        "failure_category": "GATEWAY_UNAVAILABLE",
+        "workflow_type": "PAYMENT_DEGRADATION",
+        "subject_type": "PAYMENT",
+        "diagnosis_code": "GATEWAY_TEMPORARILY_UNAVAILABLE",
+        "candidate_action_types": ["PAUSE_RETRIES", "DEFER_RETRY", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "06_subscription_issuer_unavailable.json",
+      "expected": {
+        "event_type": "subscription.halted",
+        "failure_category": "ISSUER_UNAVAILABLE",
+        "workflow_type": "FAILED_SUBSCRIPTION",
+        "subject_type": "SUBSCRIPTION",
+        "diagnosis_code": "ISSUER_TEMPORARILY_UNAVAILABLE",
+        "candidate_action_types": ["DEFER_RETRY", "PAUSE_RETRIES", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "07_subscription_insufficient_funds.json",
+      "expected": {
+        "event_type": "subscription.pending",
+        "failure_category": "INSUFFICIENT_FUNDS",
+        "workflow_type": "FAILED_SUBSCRIPTION",
+        "subject_type": "SUBSCRIPTION",
+        "diagnosis_code": "TEMPORARY_INSUFFICIENT_FUNDS",
+        "candidate_action_types": ["DEFER_RETRY", "REQUEST_PAYMENT_METHOD_UPDATE", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "08_subscription_expired_method.json",
+      "expected": {
+        "event_type": "subscription.pending",
+        "failure_category": "EXPIRED_PAYMENT_METHOD",
+        "workflow_type": "FAILED_SUBSCRIPTION",
+        "subject_type": "SUBSCRIPTION",
+        "diagnosis_code": "EXPIRED_PAYMENT_METHOD",
+        "candidate_action_types": ["REQUEST_PAYMENT_METHOD_UPDATE", "CREATE_PAYMENT_LINK", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "09_subscription_authentication_required.json",
+      "expected": {
+        "event_type": "subscription.pending",
+        "failure_category": "AUTHENTICATION_FAILURE",
+        "workflow_type": "FAILED_SUBSCRIPTION",
+        "subject_type": "SUBSCRIPTION",
+        "diagnosis_code": "PAYMENT_AUTHENTICATION_REQUIRED",
+        "candidate_action_types": ["REQUEST_PAYMENT_METHOD_UPDATE", "CREATE_PAYMENT_LINK", "NO_ACTION"]
+      }
+    },
+    {
+      "payload": "10_subscription_customer_action.json",
+      "expected": {
+        "event_type": "subscription.pending",
+        "failure_category": "CUSTOMER_ACTION_REQUIRED",
+        "workflow_type": "FAILED_SUBSCRIPTION",
+        "subject_type": "SUBSCRIPTION",
+        "diagnosis_code": "CUSTOMER_ACTION_REQUIRED",
+        "candidate_action_types": ["REQUEST_PAYMENT_METHOD_UPDATE", "SEND_REMINDER", "NO_ACTION"]
+      }
+    }
+  ]
+}

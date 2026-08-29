@@ -29,6 +29,7 @@ def test_agent_budgets_are_bounded_and_workflow_timeout_covers_model_timeout() -
     assert settings.agent_model_max_output_tokens <= 4_096
     assert settings.agent_graph_max_steps <= 32
     assert settings.agent_workflow_timeout_seconds >= settings.agent_model_timeout_seconds
+    assert settings.langsmith_tracing_enabled is False
 
     with pytest.raises(ValidationError, match="workflow timeout"):
         WorkerSettings(
@@ -36,6 +37,24 @@ def test_agent_budgets_are_bounded_and_workflow_timeout_covers_model_timeout() -
             agent_model_timeout_seconds=5,
             agent_workflow_timeout_seconds=1,
         )
+
+
+def test_langsmith_tracing_requires_an_api_key_and_is_opt_in() -> None:
+    with pytest.raises(ValidationError, match="LANGSMITH_API_KEY"):
+        WorkerSettings(
+            _env_file=None,
+            langsmith_tracing_enabled=True,
+        )
+
+    settings = WorkerSettings(
+        _env_file=None,
+        langsmith_tracing_enabled=True,
+        LANGSMITH_API_KEY="test-langsmith-key",
+        LANGSMITH_PROJECT="revenueguard-tests",
+    )
+
+    assert settings.langsmith_tracing_enabled is True
+    assert settings.langsmith_project == "revenueguard-tests"
 
 
 def test_openai_compatible_model_configuration_is_explicit_and_local_friendly() -> None:

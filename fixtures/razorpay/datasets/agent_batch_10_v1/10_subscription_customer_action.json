@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "subscription.pending",
+  "contains": ["subscription", "payment"],
+  "payload": {
+    "subscription": {
+      "entity": {
+        "id": "sub_agent_batch_10",
+        "entity": "subscription",
+        "customer_id": "customer_agent_batch_10",
+        "status": "pending",
+        "created_at": 1787890400
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_10",
+        "entity": "payment",
+        "amount": 299900,
+        "currency": "INR",
+        "status": "failed",
+        "customer_id": "customer_agent_batch_10",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "Synthetic recurring payment requires customer action.",
+        "error_reason": "customer_action_required",
+        "created_at": 1787893739
+      }
+    }
+  },
+  "created_at": 1787893740
+}

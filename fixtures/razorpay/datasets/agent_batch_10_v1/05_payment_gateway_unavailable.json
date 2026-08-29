@@ -1,0 +1,24 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "payment.failed",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_05",
+        "entity": "payment",
+        "amount": 9900,
+        "currency": "INR",
+        "status": "failed",
+        "order_id": "order_agent_batch_05",
+        "customer_id": "customer_agent_batch_05",
+        "error_code": "SERVER_ERROR",
+        "error_description": "Synthetic payment gateway was temporarily unavailable.",
+        "error_reason": "gateway_unavailable",
+        "created_at": 1787893439
+      }
+    }
+  },
+  "created_at": 1787893440
+}

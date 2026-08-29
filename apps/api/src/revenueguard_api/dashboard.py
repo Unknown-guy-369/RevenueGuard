@@ -49,6 +49,7 @@ class CaseSummary(_Contract):
     diagnosis_confidence_basis_points: int | None = Field(default=None, ge=0, le=10_000)
     retry_count: int = Field(ge=0)
     contact_count: int = Field(ge=0)
+    classification: Literal["TEST", "SYNTHETIC"] = "TEST"
     updated_at: datetime
 
 

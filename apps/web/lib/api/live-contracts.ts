@@ -27,6 +27,7 @@ export type LiveCaseSummary = {
   diagnosis_confidence_basis_points: number | null;
   retry_count: number;
   contact_count: number;
+  classification: "TEST" | "SYNTHETIC";
   updated_at: string;
 };
 
@@ -205,6 +206,7 @@ export function isLiveCaseSummary(value: unknown): value is LiveCaseSummary {
         value.diagnosis_confidence_basis_points <= 10_000)) &&
     count(value.retry_count) &&
     count(value.contact_count) &&
+    (value.classification === "TEST" || value.classification === "SYNTHETIC") &&
     timestamp(value.updated_at)
   );
 }

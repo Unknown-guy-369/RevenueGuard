@@ -9,6 +9,7 @@ from revenueguard_evaluation.webhook_replay import (
     ReplayDelivery,
     ReplayMode,
     ReplayResponse,
+    load_fixture_dataset,
     load_fixtures,
     plan_replay,
     run_replay,
@@ -28,6 +29,56 @@ def test_load_fixtures_derives_stable_event_ids(tmp_path: Path) -> None:
 
     assert first.provider_event_id == second.provider_event_id
     assert first.raw_body == fixture.read_bytes()
+
+
+def test_load_fixture_dataset_requires_synthetic_unique_local_json_files(tmp_path: Path) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first.write_text('{"event":"payment.failed"}', encoding="utf-8")
+    second.write_text('{"event":"subscription.pending"}', encoding="utf-8")
+    manifest = tmp_path / "dataset.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "classification": "SYNTHETIC",
+                "fixtures": [{"payload": first.name}, {"payload": second.name}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_fixture_dataset(manifest) == (first, second)
+
+    manifest.write_text(
+        json.dumps(
+            {
+                "classification": "PRODUCTION",
+                "fixtures": [{"payload": first.name}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="SYNTHETIC"):
+        load_fixture_dataset(manifest)
+
+
+@pytest.mark.parametrize("payload", ["../outside.json", "missing.json", "first.txt"])
+def test_load_fixture_dataset_rejects_unsafe_or_missing_payloads(
+    tmp_path: Path, payload: str
+) -> None:
+    manifest = tmp_path / "dataset.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "classification": "SYNTHETIC",
+                "fixtures": [{"payload": payload}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"local JSON|does not exist"):
+        load_fixture_dataset(manifest)
 
 
 @pytest.mark.parametrize(

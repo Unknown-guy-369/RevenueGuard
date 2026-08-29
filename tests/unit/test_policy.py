@@ -157,9 +157,9 @@ def test_candidate_skip_falls_through_and_retains_ordered_reasons() -> None:
 
     decision = evaluate_policy(policy, make_evaluation(retry, escalation, no_action(3)))
 
-    assert decision.result is PolicyResult.PROCEED
+    assert decision.result is PolicyResult.REQUIRE_HUMAN
     assert decision.selected_action is escalation
-    assert decision.reason_codes == ("ACTION_NOT_ALLOWED", "POLICY_AUTHORIZED")
+    assert decision.reason_codes == ("ACTION_NOT_ALLOWED", "AGENT_ESCALATION_REQUESTED")
     assert decision.evaluated_candidates == (retry, escalation)
 
 
@@ -219,7 +219,7 @@ def test_retry_and_contact_ceilings_only_apply_to_matching_action_classes() -> N
 
     assert retry.reason_codes[0] == "RETRY_LIMIT_REACHED"
     assert contact.reason_codes[0] == "CONTACT_LIMIT_REACHED"
-    assert escalation.result is PolicyResult.PROCEED
+    assert escalation.result is PolicyResult.REQUIRE_HUMAN
 
 
 @pytest.mark.parametrize(
@@ -342,7 +342,7 @@ def test_expected_value_guard_skips_operational_but_not_safe_internal_candidates
     )
 
     assert operational.reason_codes[0] == "EXPECTED_VALUE_BELOW_MINIMUM"
-    assert escalation.result is PolicyResult.PROCEED
+    assert escalation.result is PolicyResult.REQUIRE_HUMAN
     assert pause.result is PolicyResult.PROCEED
 
 
@@ -357,10 +357,15 @@ def test_internal_pause_still_requires_declared_capability() -> None:
     assert decision.reason_codes[0] == "ACTION_NOT_ALLOWED"
 
 
-def test_high_amount_or_low_confidence_requires_human_review() -> None:
+def test_high_amount_or_low_confidence_money_intent_requires_human_review() -> None:
     decision = evaluate_policy(
         make_policy(),
-        make_evaluation(amount_minor=50_000, confidence_basis_points=4_999),
+        make_evaluation(
+            candidate(ActionType.CREATE_PAYMENT_LINK),
+            no_action(),
+            amount_minor=50_000,
+            confidence_basis_points=4_999,
+        ),
     )
 
     assert decision.result is PolicyResult.REQUIRE_HUMAN
@@ -370,7 +375,7 @@ def test_high_amount_or_low_confidence_requires_human_review() -> None:
 
 def test_matching_approval_only_clears_human_gate() -> None:
     policy = make_policy(minimum_confidence_basis_points=9_500)
-    selected = candidate(ActionType.DEFER_RETRY)
+    selected = candidate(ActionType.CREATE_PAYMENT_LINK)
     approval = approved_request(policy, selected)
 
     authorized = evaluate_policy(
@@ -399,7 +404,7 @@ def test_matching_approval_only_clears_human_gate() -> None:
 
 def test_changed_policy_digest_invalidates_prior_approval() -> None:
     old_policy = make_policy(minimum_confidence_basis_points=9_500)
-    selected = candidate(ActionType.DEFER_RETRY)
+    selected = candidate(ActionType.CREATE_PAYMENT_LINK)
     approval = approved_request(old_policy, selected)
     new_policy = make_policy(
         version="policy-v2",
@@ -413,6 +418,32 @@ def test_changed_policy_digest_invalidates_prior_approval() -> None:
     )
 
     assert decision.result is PolicyResult.REQUIRE_HUMAN
+
+
+def test_low_confidence_retry_is_deferred_before_human_review() -> None:
+    decision = evaluate_policy(
+        make_policy(),
+        make_evaluation(
+            confidence_basis_points=4_999,
+            diagnosis_defer_until=NOW + timedelta(minutes=15),
+        ),
+    )
+
+    assert decision.result is PolicyResult.DEFER
+    assert decision.selected_action.action_type is ActionType.DEFER_RETRY
+    assert decision.reason_codes == ("LOW_CONFIDENCE_RETRY_DEFERRED",)
+    assert decision.next_evaluation_at == NOW + timedelta(minutes=15)
+
+
+def test_explicit_agent_escalation_creates_a_human_gate() -> None:
+    decision = evaluate_policy(
+        make_policy(),
+        make_evaluation(candidate(ActionType.ESCALATE_HUMAN, expected=0), no_action()),
+    )
+
+    assert decision.result is PolicyResult.REQUIRE_HUMAN
+    assert decision.resulting_state is CaseState.ESCALATED
+    assert decision.reason_codes == ("AGENT_ESCALATION_REQUESTED",)
 
 
 def test_version_bundle_uses_exact_non_model_placeholders() -> None:

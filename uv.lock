@@ -1056,6 +1056,7 @@ version = "0.1.0"
 source = { editable = "packages/agents" }
 dependencies = [
     { name = "langgraph" },
+    { name = "langsmith" },
     { name = "pydantic" },
     { name = "revenueguard-domain" },
 ]
@@ -1063,6 +1064,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "langgraph", specifier = ">=1.0" },
+    { name = "langsmith", specifier = ">=0.1.98" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "revenueguard-domain", editable = "packages/domain" },
 ]

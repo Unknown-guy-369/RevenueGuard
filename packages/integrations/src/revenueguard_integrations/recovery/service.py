@@ -58,7 +58,7 @@ from revenueguard_integrations.persistence import (
 
 APPLICATION_VERSION: Final = "0.1.0-phase5"
 _PAID_STATUSES: Final = frozenset({"CAPTURED", "CHARGED", "COMPLETED", "PAID"})
-_CANCELLED_STATUSES: Final = frozenset({"CANCELLED", "HALTED"})
+_CANCELLED_STATUSES: Final = frozenset({"CANCELLED", "ESCALATED"})
 
 Clock = Callable[[], datetime]
 IdGenerator = Callable[[str], str]
@@ -150,7 +150,6 @@ class RecoveryApplicationService:
                 merchant_id=merchant_id,
                 workflow_type=identity.workflow_type.value,
                 subject_type=identity.subject_type.value,
-                subject_id=identity.subject_id,
                 recovery_episode_key=identity.episode_key,
             )
 
@@ -574,6 +573,8 @@ class RecoveryApplicationService:
                 case=checking,
                 candidates=advisory_diagnosis.candidates,
             ),
+            active_promise_to_pay=facts.promise_due_at is not None,
+            promise_due_at=facts.promise_due_at,
         )
         decision = evaluate_policy(policy, evaluation)
         review = None
@@ -600,6 +601,11 @@ class RecoveryApplicationService:
             occurred_at=evaluated_at,
             terminal_reason=terminal_reason,
             next_evaluation_at=decision.next_evaluation_at,
+            increment_retry=(
+                decision.result is PolicyResult.DEFER
+                and decision.selected_action.action_type is ActionType.DEFER_RETRY
+                and decision.reason_codes[-1] == "LOW_CONFIDENCE_RETRY_DEFERRED"
+            ),
         )
         receipt_id = self._id_generator("receipt")
         action = self._build_action(
@@ -735,7 +741,10 @@ class RecoveryApplicationService:
         receipt_id: str,
         authorized_at: datetime,
     ) -> RecoveryAction | None:
-        if decision.result is not PolicyResult.PROCEED:
+        if (
+            decision.result is not PolicyResult.PROCEED
+            or decision.selected_action.action_type is ActionType.ESCALATE_HUMAN
+        ):
             return None
         candidate = decision.selected_action
         logical_attempt = max(1, candidate.logical_attempt)
@@ -786,6 +795,7 @@ class RecoveryApplicationService:
         next_evaluation_at: datetime | None = None,
         diagnosis: Diagnosis | None = None,
         latest_event: RevenueRiskEvent | None = None,
+        increment_retry: bool = False,
     ) -> RecoveryCase:
         updated, transition = transition_case(
             case,
@@ -806,6 +816,8 @@ class RecoveryApplicationService:
                 diagnosis=diagnosis.code,
                 diagnosis_confidence=diagnosis.confidence_basis_points / 10_000,
             )
+        if increment_retry:
+            updated = replace(updated, retry_count=updated.retry_count + 1)
         await self._repository.apply_transition(
             updated_case=updated,
             transition=transition,

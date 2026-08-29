@@ -37,6 +37,17 @@
       "source_payload_reference": "webhook_events/rzp_evt_synthetic_subscription_halted_001"
     },
     {
+      "payload": "subscription_halted_langsmith_001.json",
+      "snapshot": "snapshots/subscription_halted_langsmith_001.normalized.json",
+      "provider_event_id": "rzp_evt_synthetic_subscription_halted_langsmith_001",
+      "event_id": "evt_internal_subscription_halted_langsmith_001",
+      "merchant_id": "merchant_fixture_001",
+      "received_at": "2026-08-25T05:40:01Z",
+      "correlation_id": "corr_subscription_langsmith_fixture_001",
+      "causation_id": null,
+      "source_payload_reference": "webhook_events/rzp_evt_synthetic_subscription_halted_langsmith_001"
+    },
+    {
       "payload": "payment_link_paid.json",
       "snapshot": "snapshots/payment_link_paid.normalized.json",
       "provider_event_id": "rzp_evt_synthetic_payment_link_paid_001",

@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "subscription.pending",
+  "contains": ["subscription", "payment"],
+  "payload": {
+    "subscription": {
+      "entity": {
+        "id": "sub_agent_batch_07",
+        "entity": "subscription",
+        "customer_id": "customer_agent_batch_07",
+        "status": "pending",
+        "created_at": 1787890100
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_07",
+        "entity": "payment",
+        "amount": 59900,
+        "currency": "INR",
+        "status": "failed",
+        "customer_id": "customer_agent_batch_07",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "Synthetic recurring payment had insufficient funds.",
+        "error_reason": "insufficient_funds",
+        "created_at": 1787893559
+      }
+    }
+  },
+  "created_at": 1787893560
+}

@@ -17,6 +17,7 @@ from revenueguard_integrations.persistence import (
     ModelPrediction,
     RecoveryAction,
     RecoveryCase,
+    SimulationSession,
     VerifiedOutcome,
 )
 from sqlalchemy import func, select
@@ -91,6 +92,7 @@ class DatabaseDashboardQueryService:
                     .select_from(DecisionReceipt)
                     .where(DecisionReceipt.merchant_id == merchant_id)
                 )
+                simulated_subjects = await self._simulation_subjects(session, merchant_id)
         except DashboardNotFoundError:
             raise
         except SQLAlchemyError as error:
@@ -130,7 +132,10 @@ class DatabaseDashboardQueryService:
                 model_succeeded=prediction_counts["SUCCEEDED"],
                 model_fallback=prediction_counts["FALLBACK"],
             ),
-            recent_cases=tuple(self._case_summary(item) for item in cases[:8]),
+            recent_cases=tuple(
+                self._case_summary(item, synthetic=item.subject_id in simulated_subjects)
+                for item in cases[:8]
+            ),
         )
 
     async def list_cases(
@@ -159,13 +164,17 @@ class DatabaseDashboardQueryService:
                         )
                     ).all()
                 )
+                simulated_subjects = await self._simulation_subjects(session, merchant_id)
         except DashboardNotFoundError:
             raise
         except SQLAlchemyError as error:
             raise DashboardPersistenceError("dashboard case list query failed") from error
         return CaseList(
             context=context,
-            cases=tuple(self._case_summary(item) for item in cases),
+            cases=tuple(
+                self._case_summary(item, synthetic=item.subject_id in simulated_subjects)
+                for item in cases
+            ),
             total=total or 0,
         )
 
@@ -181,6 +190,7 @@ class DatabaseDashboardQueryService:
                 )
                 if recovery_case is None:
                     raise DashboardNotFoundError("recovery case was not found")
+                simulated_subjects = await self._simulation_subjects(session, merchant_id)
                 transitions = tuple(
                     (
                         await session.scalars(
@@ -259,7 +269,9 @@ class DatabaseDashboardQueryService:
             raise DashboardPersistenceError("dashboard case detail query failed") from error
         return CaseDetail(
             context=context,
-            case=self._case_summary(recovery_case),
+            case=self._case_summary(
+                recovery_case, synthetic=recovery_case.subject_id in simulated_subjects
+            ),
             transitions=tuple(
                 TransitionItem(
                     transition_id=str(item.id),
@@ -425,7 +437,18 @@ class DatabaseDashboardQueryService:
         return defaultdict(int, {str(status): int(count) for status, count in rows.all()})
 
     @staticmethod
-    def _case_summary(item: RecoveryCase) -> CaseSummary:
+    async def _simulation_subjects(session: AsyncSession, merchant_id: str) -> set[str]:
+        rows = (
+            await session.execute(
+                select(SimulationSession.payment_id, SimulationSession.subscription_id).where(
+                    SimulationSession.merchant_id == merchant_id
+                )
+            )
+        ).all()
+        return {subject for row in rows for subject in row if subject is not None}
+
+    @staticmethod
+    def _case_summary(item: RecoveryCase, *, synthetic: bool = False) -> CaseSummary:
         return CaseSummary(
             case_id=item.id,
             state=item.state,
@@ -442,6 +465,7 @@ class DatabaseDashboardQueryService:
             diagnosis_confidence_basis_points=item.diagnosis_confidence_basis_points,
             retry_count=item.retry_count,
             contact_count=item.contact_count,
+            classification="SYNTHETIC" if synthetic else "TEST",
             updated_at=item.updated_at,
         )
 

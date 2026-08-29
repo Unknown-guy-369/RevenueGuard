@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "event_id": "evt_internal_subscription_halted_langsmith_001",
+  "merchant_id": "merchant_fixture_001",
+  "source": "SYNTHETIC",
+  "source_event_id": "rzp_evt_synthetic_subscription_halted_langsmith_001",
+  "event_type": "subscription.halted",
+  "occurred_at": "2026-08-25T05:40:00Z",
+  "received_at": "2026-08-25T05:40:01Z",
+  "customer_id": "customer_fixture_langsmith_001",
+  "payment_id": "pay_fixture_langsmith_001",
+  "order_id": null,
+  "subscription_id": "sub_fixture_langsmith_001",
+  "invoice_id": null,
+  "payment_link_id": null,
+  "amount_minor": 129900,
+  "currency": "INR",
+  "failure_code": "SERVER_ERROR",
+  "normalized_failure_category": "ISSUER_UNAVAILABLE",
+  "correlation_id": "corr_subscription_langsmith_fixture_001",
+  "causation_id": null,
+  "source_payload_reference": "webhook_events/rzp_evt_synthetic_subscription_halted_langsmith_001"
+}

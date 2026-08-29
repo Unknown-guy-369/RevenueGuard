@@ -1,0 +1,32 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "subscription.pending",
+  "contains": ["subscription", "payment"],
+  "payload": {
+    "subscription": {
+      "entity": {
+        "id": "sub_agent_batch_09",
+        "entity": "subscription",
+        "customer_id": "customer_agent_batch_09",
+        "status": "pending",
+        "created_at": 1787890300
+      }
+    },
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_09",
+        "entity": "payment",
+        "amount": 159900,
+        "currency": "INR",
+        "status": "failed",
+        "customer_id": "customer_agent_batch_09",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "Synthetic recurring payment authentication failed.",
+        "error_reason": "otp_failed",
+        "created_at": 1787893679
+      }
+    }
+  },
+  "created_at": 1787893680
+}

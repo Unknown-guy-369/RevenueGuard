@@ -1,0 +1,24 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "payment.failed",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_02",
+        "entity": "payment",
+        "amount": 129900,
+        "currency": "INR",
+        "status": "failed",
+        "order_id": "order_agent_batch_02",
+        "customer_id": "customer_agent_batch_02",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "Synthetic payment method has expired.",
+        "error_reason": "expired_card",
+        "created_at": 1787893259
+      }
+    }
+  },
+  "created_at": 1787893260
+}

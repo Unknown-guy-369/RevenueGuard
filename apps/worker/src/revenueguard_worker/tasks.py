@@ -10,9 +10,11 @@ from typing import Literal, TypedDict, cast
 from revenueguard_agents import (
     AgentBudget,
     BoundedCaseIntelligence,
+    LangSmithCaseIntelligenceTracer,
+    LangSmithTracingConfig,
     OpenAICompatibleStructuredModel,
 )
-from revenueguard_domain import ActionType, RecoveryAction
+from revenueguard_domain import ActionType, EventSource, RecoveryAction
 from revenueguard_integrations.execution import (
     ActionExecutionService,
     ActionProvider,
@@ -58,6 +60,11 @@ def _build_case_intelligence(worker_settings: WorkerSettings) -> BoundedCaseInte
             token_limit_field=worker_settings.agent_model_token_limit_field,
             timeout_seconds=worker_settings.agent_model_timeout_seconds,
         )
+    langsmith_api_key = (
+        worker_settings.langsmith_api_key.get_secret_value()
+        if worker_settings.langsmith_api_key is not None
+        else None
+    )
     return BoundedCaseIntelligence(
         model,
         budget=AgentBudget(
@@ -66,6 +73,13 @@ def _build_case_intelligence(worker_settings: WorkerSettings) -> BoundedCaseInte
             max_model_retries=worker_settings.agent_model_max_retries,
             max_output_tokens=worker_settings.agent_model_max_output_tokens,
             max_graph_steps=worker_settings.agent_graph_max_steps,
+        ),
+        tracer=LangSmithCaseIntelligenceTracer(
+            LangSmithTracingConfig(
+                enabled=worker_settings.langsmith_tracing_enabled,
+                project_name=worker_settings.langsmith_project,
+                api_key=langsmith_api_key,
+            )
         ),
     )
 
@@ -258,6 +272,9 @@ async def _process_webhook_event(
             received_at=webhook.received_at,
             correlation_id=webhook.correlation_id,
             source_payload_reference=f"webhook_events/{webhook.provider_event_id}",
+            source=(
+                EventSource.SYNTHETIC if webhook.provider == "SIMULATOR" else EventSource.RAZORPAY
+            ),
         )
         document = cast(Mapping[str, object], webhook.raw_payload or {})
         await _upsert_provider_entities(repository, event.to_dict(), document)

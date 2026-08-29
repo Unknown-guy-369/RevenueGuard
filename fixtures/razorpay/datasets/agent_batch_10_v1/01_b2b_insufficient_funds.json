@@ -1,0 +1,25 @@
+{
+  "entity": "event",
+  "account_id": "acc_fixture_not_a_revenueguard_tenant",
+  "event": "payment.failed",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_agent_batch_01",
+        "entity": "payment",
+        "amount": 49900,
+        "currency": "INR",
+        "status": "failed",
+        "order_id": "order_agent_batch_01",
+        "invoice_id": "invoice_agent_batch_01",
+        "customer_id": "customer_agent_batch_01",
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "Synthetic payment failed because the account had insufficient funds.",
+        "error_reason": "insufficient_funds",
+        "created_at": 1787893199
+      }
+    }
+  },
+  "created_at": 1787893200
+}

@@ -260,8 +260,10 @@ class ActionExecutionService:
                 incidents=incidents,
                 already_paid=status in {"CAPTURED", "CHARGED", "COMPLETED", "PAID"},
                 disputed=status == "DISPUTED",
-                cancelled=status in {"CANCELLED", "HALTED"},
+                cancelled=status in {"CANCELLED", "ESCALATED"},
                 approval=approval,
+                active_promise_to_pay=facts.promise_due_at is not None,
+                promise_due_at=facts.promise_due_at,
             ),
         )
 

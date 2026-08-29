@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
+import pytest
+import revenueguard_agents.tracing as agent_tracing
 from pydantic import BaseModel
 from revenueguard_agents import (
     AGENT_MAY_EXECUTE_EXTERNAL_ACTIONS,
     AgentBudget,
     BoundedCaseIntelligence,
     CaseIntelligenceRequest,
+    CaseIntelligenceResult,
+    CaseIntelligenceTraceRun,
+    DisabledCaseIntelligenceTracer,
     EvidenceItem,
+    LangSmithCaseIntelligenceTracer,
+    LangSmithTracingConfig,
     ModelResponse,
     redact_model_payload,
 )
+from revenueguard_agents.tracing import _trace_request, _trace_result
 from revenueguard_domain import (
     ActionType,
     CandidateAction,
@@ -58,6 +67,33 @@ class ScriptedModel:
             input_tokens=25,
             output_tokens=40,
         )
+
+
+class RecordingTraceRun:
+    def __init__(self) -> None:
+        self.results: list[CaseIntelligenceResult] = []
+
+    def record_result(self, result: CaseIntelligenceResult) -> None:
+        self.results.append(result)
+
+
+class RecordingTracer:
+    def __init__(self) -> None:
+        self.requests: list[CaseIntelligenceRequest] = []
+        self.runs: list[RecordingTraceRun] = []
+        self.suppressed_child_trace_count = 0
+
+    @contextmanager
+    def case_run(self, request: CaseIntelligenceRequest) -> Iterator[CaseIntelligenceTraceRun]:
+        self.requests.append(request)
+        run = RecordingTraceRun()
+        self.runs.append(run)
+        yield run
+
+    @contextmanager
+    def suppress_automatic_child_traces(self) -> Iterator[None]:
+        self.suppressed_child_trace_count += 1
+        yield
 
 
 def _request() -> CaseIntelligenceRequest:
@@ -249,6 +285,102 @@ async def test_slow_graph_has_a_single_traceable_deterministic_fallback() -> Non
     assert result.candidates == _request().candidates
     assert len(result.predictions) == 1
     assert result.predictions[0].failure_code == "GRAPH_TIMEOUT"
+
+
+async def test_optional_tracing_records_a_redacted_projection_without_changing_the_graph() -> None:
+    request = _request()
+    tracer = RecordingTracer()
+    model = ScriptedModel(_successful_outputs())
+
+    result = await BoundedCaseIntelligence(model, tracer=tracer).recommend(request)
+
+    assert tracer.requests == [request]
+    assert tracer.suppressed_child_trace_count == 1
+    assert tracer.runs[0].results == [result]
+
+    trace_input = _trace_request(request)
+    trace_output = _trace_result(result)
+    serialized = repr({"input": trace_input, "output": trace_output})
+
+    assert "merchant_secret_001" not in serialized
+    assert "case_001" not in serialized
+    assert "intelligence_run_001" not in serialized
+    assert "correlation_001" not in serialized
+    assert "subscription_secret_001" not in serialized
+    assert "event_private_001" not in serialized
+    assert "jane@example.com" not in serialized
+    assert "+91 98765 43210" not in serialized
+    assert "rzp_test_ABC123SECRET" not in serialized
+    assert "amount_minor" not in serialized
+    assert "expected_net_recovery_minor" not in serialized
+    assert "explanation" not in serialized
+    assert trace_input["workflow_type"] == "FAILED_SUBSCRIPTION"
+    assert trace_output["status"] == "SUCCEEDED"
+
+
+def test_default_tracer_suppresses_automatic_langgraph_tracing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+
+    @contextmanager
+    def recording_tracing_context(*, enabled: bool) -> Iterator[None]:
+        calls.append(enabled)
+        yield
+
+    monkeypatch.setattr(agent_tracing, "tracing_context", recording_tracing_context)
+
+    with DisabledCaseIntelligenceTracer().suppress_automatic_child_traces():
+        pass
+
+    assert calls == [False]
+
+
+async def test_langsmith_tracer_records_only_the_reviewed_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    recorded_outputs: list[Mapping[str, object]] = []
+    tracing_contexts: list[bool] = []
+
+    class FakeRun:
+        def end(self, *, outputs: Mapping[str, object]) -> None:
+            recorded_outputs.append(outputs)
+
+    @contextmanager
+    def fake_trace(*args: object, **kwargs: object) -> Iterator[FakeRun]:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        yield FakeRun()
+
+    @contextmanager
+    def fake_tracing_context(*, enabled: bool) -> Iterator[None]:
+        tracing_contexts.append(enabled)
+        yield
+
+    request = _request()
+    result = await BoundedCaseIntelligence(ScriptedModel(_successful_outputs())).recommend(request)
+
+    monkeypatch.setattr(agent_tracing, "Client", lambda *, api_key: object())
+    monkeypatch.setattr(agent_tracing, "trace", fake_trace)
+    monkeypatch.setattr(agent_tracing, "tracing_context", fake_tracing_context)
+
+    tracer = LangSmithCaseIntelligenceTracer(
+        LangSmithTracingConfig(enabled=True, project_name="revenueguard-tests", api_key="test-key")
+    )
+    with tracer.case_run(request) as trace_run:
+        trace_run.record_result(result)
+
+    serialized = repr({"inputs": captured["kwargs"], "outputs": recorded_outputs})
+    assert captured["args"] == ("revenueguard.case_intelligence", "chain")
+    assert "merchant_secret_001" not in serialized
+    assert "case_001" not in serialized
+    assert "subscription_secret_001" not in serialized
+    assert "jane@example.com" not in serialized
+    assert "amount_minor" not in serialized
+    assert "expected_net_recovery_minor" not in serialized
+    assert recorded_outputs[0]["status"] == "SUCCEEDED"
+    assert tracing_contexts == [True]
 
 
 def test_agent_surface_has_no_execution_authority_and_redacts_sensitive_keys() -> None:

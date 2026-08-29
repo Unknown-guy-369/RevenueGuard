@@ -42,6 +42,17 @@ class WorkerSettings(BaseSettings):
     agent_model_max_retries: int = Field(default=1, ge=0, le=3)
     agent_model_max_output_tokens: int = Field(default=512, ge=64, le=4_096)
     agent_graph_max_steps: int = Field(default=8, ge=8, le=32)
+    langsmith_tracing_enabled: bool = False
+    langsmith_project: str = Field(
+        default="revenueguard-case-intelligence",
+        min_length=1,
+        max_length=128,
+        validation_alias="LANGSMITH_PROJECT",
+    )
+    langsmith_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="LANGSMITH_API_KEY",
+    )
     razorpay_timeout_seconds: float = Field(default=10, gt=0, le=60)
     razorpay_key_id: SecretStr | None = Field(
         default=None,
@@ -61,6 +72,10 @@ class WorkerSettings(BaseSettings):
                 raise ValueError("agent model base URL is required for OPENAI_COMPATIBLE")
             if not self.agent_model_name or not self.agent_model_name.strip():
                 raise ValueError("agent model name is required for OPENAI_COMPATIBLE")
+        if self.langsmith_tracing_enabled and (
+            self.langsmith_api_key is None or not self.langsmith_api_key.get_secret_value().strip()
+        ):
+            raise ValueError("LANGSMITH_API_KEY is required when LangSmith tracing is enabled")
         return self
 
 

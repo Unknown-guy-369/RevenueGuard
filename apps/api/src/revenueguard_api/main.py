@@ -17,12 +17,24 @@ from revenueguard_api.dashboard import (
     UnavailableDashboardQueryService,
 )
 from revenueguard_api.dashboard_persistence import DatabaseDashboardQueryService
+from revenueguard_api.merchant_dashboard import (
+    MerchantDashboardService,
+    UnavailableMerchantDashboardService,
+)
+from revenueguard_api.merchant_dashboard_persistence import DatabaseMerchantDashboardService
 from revenueguard_api.persistence import (
     DatabaseMerchantWebhookResolver,
     DatabaseWebhookIngestionService,
 )
 from revenueguard_api.probes import DependencyProbe, probe_dependencies
 from revenueguard_api.routes.dashboard import router as dashboard_router
+from revenueguard_api.routes.merchant_dashboard import (
+    dashboard_router as merchant_dashboard_router,
+)
+from revenueguard_api.routes.merchant_dashboard import (
+    public_simulation_router,
+    simulation_router,
+)
 from revenueguard_api.routes.system import router as system_router
 from revenueguard_api.routes.webhooks import router as webhook_router
 from revenueguard_api.webhooks import (
@@ -38,6 +50,7 @@ def create_app(
     merchant_webhook_resolver: MerchantWebhookResolver | None = None,
     webhook_ingestion_service: WebhookIngestionService | None = None,
     dashboard_query_service: DashboardQueryService | None = None,
+    merchant_dashboard_service: MerchantDashboardService | None = None,
 ) -> FastAPI:
     """Create an API instance with injectable dependency probes for tests."""
 
@@ -54,7 +67,10 @@ def create_app(
         and settings.razorpay_webhook_secret is not None
         and settings.razorpay_webhook_secret.get_secret_value()
     )
-    if webhook_configured or (dashboard_query_service is None and dashboard_configured):
+    if webhook_configured or (
+        dashboard_configured
+        and (dashboard_query_service is None or merchant_dashboard_service is None)
+    ):
         application_engine = create_database_engine(settings.database_url)
         session_factory = create_session_factory(application_engine)
     if webhook_configured:
@@ -75,6 +91,10 @@ def create_app(
         if session_factory is None:
             raise AssertionError("dashboard persistence session factory was not initialized")
         dashboard_query_service = DatabaseDashboardQueryService(session_factory)
+    if merchant_dashboard_service is None and dashboard_configured:
+        if session_factory is None:
+            raise AssertionError("merchant dashboard session factory was not initialized")
+        merchant_dashboard_service = DatabaseMerchantDashboardService(session_factory)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -103,8 +123,14 @@ def create_app(
     application.state.dashboard_query_service = (
         dashboard_query_service or UnavailableDashboardQueryService()
     )
+    application.state.merchant_dashboard_service = (
+        merchant_dashboard_service or UnavailableMerchantDashboardService()
+    )
     application.include_router(system_router)
     application.include_router(dashboard_router)
+    application.include_router(merchant_dashboard_router)
+    application.include_router(simulation_router)
+    application.include_router(public_simulation_router)
     application.include_router(webhook_router)
     return application
 

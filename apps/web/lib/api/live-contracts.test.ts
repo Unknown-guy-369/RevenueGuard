@@ -46,6 +46,7 @@ const overview = {
       diagnosis_confidence_basis_points: 9_200,
       retry_count: 1,
       contact_count: 0,
+      classification: "TEST",
       updated_at: "2026-08-27T12:00:00Z",
     },
   ],

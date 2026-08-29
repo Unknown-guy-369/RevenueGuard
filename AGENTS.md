@@ -33,6 +33,10 @@ Read the relevant parts of these documents before making architectural or cross-
 
 Do not silently contradict these documents. If a requested change conflicts with a safety invariant or requires an architectural deviation, explain the conflict and update the relevant architecture decision/document as part of the change.
 
+### 2.1 Codebase exploration and navigation
+
+When exploring, navigating, or seeking to understand the codebase architecture, file relationships, or component structure, agents MUST use `graphify` (the knowledge graph / graphify skill, especially when `graphify-out/` exists) to query and inspect codebase context quickly instead of reading every individual file line-by-line.
+
 ## 3. Product scope
 
 Implement the core workflows deeply in this order:

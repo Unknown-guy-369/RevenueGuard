@@ -24,6 +24,7 @@ def make_event(
     subscription_id: str | None = None,
     invoice_id: str | None = None,
     payment_link_id: str | None = None,
+    order_id: str | None = None,
 ) -> RevenueRiskEvent:
     return RevenueRiskEvent(
         event_id="event_001",
@@ -40,6 +41,7 @@ def make_event(
         source_payload_reference="webhook:event_001",
         customer_id="customer_001",
         payment_id=payment_id,
+        order_id=order_id,
         subscription_id=subscription_id,
         invoice_id=invoice_id,
         payment_link_id=payment_link_id,
@@ -82,7 +84,7 @@ def make_event(
         (
             NormalizedFailureCategory.UNKNOWN,
             "UNKNOWN_PAYMENT_FAILURE",
-            ActionType.ESCALATE_HUMAN,
+            ActionType.DEFER_RETRY,
         ),
     ],
 )
@@ -180,6 +182,35 @@ def test_episode_key_is_stable_and_changes_with_reliable_reference() -> None:
     assert first.episode_key == replay.episode_key
     assert first.episode_key != next_episode.episode_key
     assert len(first.episode_key or "") == 64
+
+
+def test_payment_attempts_for_one_order_share_an_episode_key() -> None:
+    first = select_case_identity(
+        make_event(
+            NormalizedFailureCategory.UNKNOWN,
+            payment_id="payment_attempt_001",
+            order_id="order_001",
+        )
+    )
+    retry = select_case_identity(
+        make_event(
+            NormalizedFailureCategory.UNKNOWN,
+            payment_id="payment_attempt_002",
+            order_id="order_001",
+        )
+    )
+    next_order = select_case_identity(
+        make_event(
+            NormalizedFailureCategory.UNKNOWN,
+            payment_id="payment_attempt_003",
+            order_id="order_002",
+        )
+    )
+
+    assert first is not None and retry is not None and next_order is not None
+    assert first.subject_id != retry.subject_id
+    assert first.episode_key == retry.episode_key
+    assert first.episode_key != next_order.episode_key
 
 
 def test_payment_link_only_event_is_not_assigned_an_invented_subject() -> None:

@@ -136,6 +136,82 @@ class Subscription(TimestampColumns, Base):
     )
 
 
+class Invoice(TimestampColumns, Base):
+    __tablename__ = "invoices"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    provider_invoice_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    outstanding_amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    provider_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    automation_frozen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["merchant_id", "customer_id"],
+            ["customers.merchant_id", "customers.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "merchant_id", "provider_invoice_id", name="uq_invoices_merchant_provider_id"
+        ),
+        CheckConstraint(
+            "amount_minor >= 0 AND outstanding_amount_minor >= 0 "
+            "AND outstanding_amount_minor <= amount_minor",
+            name="ck_invoices_amounts_valid",
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_invoices_currency_iso"),
+        CheckConstraint(
+            "status IN ('OPEN', 'OVERDUE', 'PROMISED', 'PAID', 'DISPUTED', "
+            "'ESCALATED', 'CANCELLED')",
+            name="ck_invoices_status",
+        ),
+        CheckConstraint(
+            "(status = 'DISPUTED' AND automation_frozen_at IS NOT NULL) OR (status <> 'DISPUTED')",
+            name="ck_invoices_dispute_frozen",
+        ),
+        Index("ix_invoices_merchant_due", "merchant_id", "status", "due_at"),
+    )
+
+
+class MerchantEvent(Base):
+    """Authenticated non-provider event inbox for receivables and replies."""
+
+    __tablename__ = "merchant_events"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_event_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        UniqueConstraint("merchant_id", "source_event_id", name="uq_merchant_events_source_event"),
+        CheckConstraint(
+            "event_type IN ('invoice.overdue', 'customer.response')",
+            name="ck_merchant_events_type",
+        ),
+        CheckConstraint(
+            "payload_sha256 ~ '^[0-9a-f]{64}$'", name="ck_merchant_events_payload_digest"
+        ),
+        Index("ix_merchant_events_received", "merchant_id", "received_at"),
+    )
+
+
 class WebhookEvent(Base):
     __tablename__ = "webhook_events"
 
@@ -196,7 +272,8 @@ class NormalizedEvent(Base):
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
     merchant_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    webhook_event_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    webhook_event_id: Mapped[str | None] = mapped_column(String(36))
+    merchant_event_id: Mapped[str | None] = mapped_column(String(128))
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False)
     source: Mapped[str] = mapped_column(String(32), nullable=False)
     source_event_id: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -229,6 +306,11 @@ class NormalizedEvent(Base):
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
+            ["merchant_id", "merchant_event_id"],
+            ["merchant_events.merchant_id", "merchant_events.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
             ["merchant_id", "customer_id"],
             ["customers.merchant_id", "customers.id"],
             ondelete="RESTRICT",
@@ -245,6 +327,7 @@ class NormalizedEvent(Base):
         ),
         UniqueConstraint("merchant_id", "id", name="uq_normalized_events_merchant_id_id"),
         UniqueConstraint("webhook_event_id", name="uq_normalized_events_webhook_event"),
+        UniqueConstraint("merchant_event_id", name="uq_normalized_events_merchant_event"),
         UniqueConstraint(
             "merchant_id", "source", "source_event_id", name="uq_normalized_events_source_event"
         ),
@@ -255,6 +338,11 @@ class NormalizedEvent(Base):
         ),
         CheckConstraint("amount_minor >= 0", name="ck_normalized_events_amount_nonnegative"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_normalized_events_currency_iso"),
+        CheckConstraint(
+            "(webhook_event_id IS NOT NULL)::integer + "
+            "(merchant_event_id IS NOT NULL)::integer = 1",
+            name="ck_normalized_events_one_inbox_source",
+        ),
         CheckConstraint(
             "customer_id IS NOT NULL OR payment_id IS NOT NULL OR subscription_id IS NOT NULL "
             "OR invoice_id IS NOT NULL OR payment_link_id IS NOT NULL",
@@ -428,7 +516,6 @@ class RecoveryCase(TimestampColumns, Base):
             "merchant_id",
             "workflow_type",
             "subject_type",
-            "subject_id",
             "recovery_episode_key",
             unique=True,
             postgresql_where=text("recovery_episode_key IS NOT NULL"),
@@ -966,7 +1053,31 @@ class PortfolioIncident(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    dimension_key: Mapped[str] = mapped_column(String(384), nullable=False, default="LEGACY")
+    payment_method: Mapped[str | None] = mapped_column(String(128))
+    issuer_family: Mapped[str | None] = mapped_column(String(128))
+    error_family: Mapped[str | None] = mapped_column(String(128))
+    baseline_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    baseline_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    current_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    current_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    baseline_failure_rate_basis_points: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    current_failure_rate_basis_points: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    threshold_version: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="phase6-playbooks-1.0"
+    )
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False, default=dict)
+    clear_window_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution_reason: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
     )
 
@@ -979,11 +1090,329 @@ class PortfolioIncident(Base):
         CheckConstraint("status IN ('ACTIVE', 'RESOLVED')", name="ck_portfolio_incidents_status"),
         CheckConstraint("ends_at > starts_at", name="ck_portfolio_incidents_window"),
         CheckConstraint(
+            "baseline_total >= 0 AND baseline_failures >= 0 "
+            "AND baseline_failures <= baseline_total "
+            "AND current_total >= 0 AND current_failures >= 0 "
+            "AND current_failures <= current_total",
+            name="ck_portfolio_incidents_counts",
+        ),
+        CheckConstraint(
+            "baseline_failure_rate_basis_points BETWEEN 0 AND 10000 "
+            "AND current_failure_rate_basis_points BETWEEN 0 AND 10000",
+            name="ck_portfolio_incidents_rates",
+        ),
+        CheckConstraint("clear_window_count >= 0", name="ck_portfolio_incidents_clear_windows"),
+        CheckConstraint(
+            "(status = 'ACTIVE' AND resolved_at IS NULL AND resolution_reason IS NULL) OR "
+            "(status = 'RESOLVED' AND resolved_at IS NOT NULL "
+            "AND resolution_reason IS NOT NULL)",
+            name="ck_portfolio_incidents_resolution",
+        ),
+        CheckConstraint(
             "(scope = 'CONTACT_CHANNEL' AND channel IN ('EMAIL', 'SMS', 'WHATSAPP')) OR "
             "(scope <> 'CONTACT_CHANNEL' AND channel IS NULL)",
             name="ck_portfolio_incidents_channel_scope",
         ),
         Index("ix_portfolio_incidents_active", "merchant_id", "starts_at", "ends_at"),
+        Index(
+            "uq_portfolio_incidents_active_dimension",
+            "merchant_id",
+            "dimension_key",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+    )
+
+
+class CustomerResponse(Base):
+    """Redacted customer reply evidence and its validated structured extraction."""
+
+    __tablename__ = "customer_responses"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_response_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    invoice_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    body_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    intent: Mapped[str] = mapped_column(String(32), nullable=False)
+    promised_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    amount_minor: Mapped[int | None] = mapped_column(BigInteger)
+    currency: Mapped[str | None] = mapped_column(String(3))
+    confidence_basis_points: Mapped[int] = mapped_column(Integer, nullable=False)
+    extractor_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "invoice_id"],
+            ["invoices.merchant_id", "invoices.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "customer_id"],
+            ["customers.merchant_id", "customers.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("merchant_id", "source_response_id", name="uq_customer_responses_source"),
+        CheckConstraint("body_sha256 ~ '^[0-9a-f]{64}$'", name="ck_responses_body_digest"),
+        CheckConstraint(
+            "intent IN ('PROMISE_TO_PAY', 'DISPUTE', 'ALREADY_PAID', 'NEEDS_HELP', 'UNKNOWN')",
+            name="ck_responses_intent",
+        ),
+        CheckConstraint(
+            "confidence_basis_points BETWEEN 0 AND 10000",
+            name="ck_responses_confidence",
+        ),
+        CheckConstraint(
+            "(intent = 'PROMISE_TO_PAY' AND promised_for IS NOT NULL "
+            "AND amount_minor > 0 AND currency ~ '^[A-Z]{3}$') OR "
+            "(intent <> 'PROMISE_TO_PAY' AND promised_for IS NULL "
+            "AND amount_minor IS NULL AND currency IS NULL)",
+            name="ck_responses_promise_terms",
+        ),
+    )
+
+
+class PromiseToPay(Base):
+    __tablename__ = "promises_to_pay"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    invoice_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    customer_response_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    promised_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reminder_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    extractor_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    extraction_confidence_basis_points: Mapped[int] = mapped_column(Integer, nullable=False)
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    broken_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminder_action_id: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "reminder_action_id"],
+            ["recovery_actions.merchant_id", "recovery_actions.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "invoice_id"],
+            ["invoices.merchant_id", "invoices.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "customer_response_id"],
+            ["customer_responses.merchant_id", "customer_responses.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("merchant_id", "customer_response_id", name="uq_promises_response"),
+        CheckConstraint("amount_minor > 0", name="ck_promises_amount_positive"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_promises_currency_iso"),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'FULFILLED', 'BROKEN', 'DISPUTED', 'CANCELLED')",
+            name="ck_promises_status",
+        ),
+        CheckConstraint(
+            "extraction_confidence_basis_points BETWEEN 0 AND 10000",
+            name="ck_promises_confidence",
+        ),
+        CheckConstraint(
+            "(status = 'FULFILLED' AND fulfilled_at IS NOT NULL) OR status <> 'FULFILLED'",
+            name="ck_promises_fulfilled_at",
+        ),
+        CheckConstraint(
+            "(status = 'BROKEN' AND broken_at IS NOT NULL) OR status <> 'BROKEN'",
+            name="ck_promises_broken_at",
+        ),
+        Index(
+            "ix_promises_due_reminder",
+            "status",
+            "reminder_at",
+            postgresql_where=text("status = 'ACTIVE' AND reminder_action_id IS NULL"),
+        ),
+        Index(
+            "ix_promises_due_break",
+            "status",
+            "promised_for",
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+    )
+
+
+class ReceivableEscalation(Base):
+    __tablename__ = "receivable_escalations"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    invoice_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    customer_response_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="OPEN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[str | None] = mapped_column(String(128))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "invoice_id"],
+            ["invoices.merchant_id", "invoices.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "customer_response_id"],
+            ["customer_responses.merchant_id", "customer_responses.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "merchant_id", "customer_response_id", name="uq_receivable_escalations_response"
+        ),
+        CheckConstraint("status IN ('OPEN', 'RESOLVED')", name="ck_escalations_status"),
+    )
+
+
+class PaymentOutcomeObservation(Base):
+    __tablename__ = "payment_outcome_observations"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payment_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_event_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    succeeded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(128), nullable=False)
+    issuer_family: Mapped[str] = mapped_column(String(128), nullable=False)
+    error_family: Mapped[str] = mapped_column(String(128), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        UniqueConstraint(
+            "merchant_id", "source_event_id", name="uq_payment_observations_source_event"
+        ),
+        Index(
+            "ix_payment_observations_dimension_time",
+            "merchant_id",
+            "payment_method",
+            "issuer_family",
+            "error_family",
+            "occurred_at",
+        ),
+    )
+
+
+class IncidentCaseLink(Base):
+    __tablename__ = "incident_case_links"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    incident_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    recovery_case_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    attached_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resume_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "incident_id"],
+            ["portfolio_incidents.merchant_id", "portfolio_incidents.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "resume_after IS NULL OR resume_after >= attached_at",
+            name="ck_incident_case_links_resume_order",
+        ),
+        Index("ix_incident_case_links_resume", "merchant_id", "resume_after", "resumed_at"),
+    )
+
+
+class SimulationSession(Base):
+    """Durable Test Mode checkout session; never contributes to production metrics."""
+
+    __tablename__ = "simulation_sessions"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scenario: Mapped[str] = mapped_column(String(32), nullable=False)
+    flow_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    amount_minor: Mapped[int] = mapped_column(BigInteger(), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    payment_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    subscription_id: Mapped[str | None] = mapped_column(String(128))
+    provider_event_id: Mapped[str | None] = mapped_column(String(256))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="CREATED")
+    classification: Mapped[str] = mapped_column(String(16), nullable=False, default="SYNTHETIC")
+    generator_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        UniqueConstraint("id", name="uq_simulation_sessions_public_id"),
+        UniqueConstraint("merchant_id", "payment_id", name="uq_simulation_sessions_payment"),
+        UniqueConstraint("merchant_id", "provider_event_id", name="uq_simulation_sessions_event"),
+        CheckConstraint(
+            "scenario IN ('SUCCESS', 'INSUFFICIENT_FUNDS', 'ISSUER_OUTAGE', 'TIMEOUT')",
+            name="ck_simulation_sessions_scenario",
+        ),
+        CheckConstraint(
+            "flow_type IN ('ONE_TIME', 'SUBSCRIPTION')",
+            name="ck_simulation_sessions_flow",
+        ),
+        CheckConstraint("amount_minor > 0", name="ck_simulation_sessions_amount"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="ck_simulation_sessions_currency"),
+        CheckConstraint(
+            "status IN ('CREATED', 'SUBMITTED', 'EXPIRED')",
+            name="ck_simulation_sessions_status",
+        ),
+        CheckConstraint(
+            "classification = 'SYNTHETIC'", name="ck_simulation_sessions_classification"
+        ),
+        CheckConstraint("expires_at > created_at", name="ck_simulation_sessions_expiry"),
+        CheckConstraint(
+            "(status = 'CREATED' AND attempted_at IS NULL AND provider_event_id IS NULL) OR "
+            "(status = 'SUBMITTED' AND attempted_at IS NOT NULL "
+            "AND provider_event_id IS NOT NULL) OR "
+            "(status = 'EXPIRED' AND provider_event_id IS NULL)",
+            name="ck_simulation_sessions_lifecycle",
+        ),
+        Index("ix_simulation_sessions_expiry", "status", "expires_at"),
     )
 
 

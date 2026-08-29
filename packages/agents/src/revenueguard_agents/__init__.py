@@ -27,6 +27,13 @@ from revenueguard_agents.providers import (
     UrllibProviderHttpTransport,
 )
 from revenueguard_agents.redaction import redact_model_payload
+from revenueguard_agents.tracing import (
+    CaseIntelligenceTracer,
+    CaseIntelligenceTraceRun,
+    DisabledCaseIntelligenceTracer,
+    LangSmithCaseIntelligenceTracer,
+    LangSmithTracingConfig,
+)
 
 __all__ = [
     "AGENT_MAY_EXECUTE_EXTERNAL_ACTIONS",
@@ -37,7 +44,12 @@ __all__ = [
     "CaseIntelligence",
     "CaseIntelligenceRequest",
     "CaseIntelligenceResult",
+    "CaseIntelligenceTraceRun",
+    "CaseIntelligenceTracer",
+    "DisabledCaseIntelligenceTracer",
     "EvidenceItem",
+    "LangSmithCaseIntelligenceTracer",
+    "LangSmithTracingConfig",
     "ModelProviderError",
     "ModelResponse",
     "ModelUnavailableError",

@@ -5,6 +5,7 @@ description = "Bounded RevenueGuard agent orchestration"
 requires-python = ">=3.14,<3.15"
 dependencies = [
   "langgraph>=1.0",
+  "langsmith>=0.1.98",
   "pydantic>=2.12",
   "revenueguard-domain",
 ]

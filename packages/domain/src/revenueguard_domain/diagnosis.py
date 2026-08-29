@@ -103,8 +103,11 @@ _DIAGNOSES: Final = {
     NormalizedFailureCategory.UNKNOWN: (
         "UNKNOWN_PAYMENT_FAILURE",
         3000,
-        (_CandidateTemplate(ActionType.ESCALATE_HUMAN, 1000, 0),),
-        0,
+        (
+            _CandidateTemplate(ActionType.DEFER_RETRY, 3000, 0),
+            _CandidateTemplate(ActionType.ESCALATE_HUMAN, 1000, 0),
+        ),
+        900,
     ),
 }
 
@@ -124,7 +127,14 @@ def select_case_identity(event: RevenueRiskEvent) -> CaseIdentity | None:
         workflow = WorkflowType.PAYMENT_DEGRADATION
     else:
         return None
-    episode_reference = event.payment_id or event.invoice_id
+    if workflow is WorkflowType.PAYMENT_DEGRADATION:
+        # A merchant order is the durable coordination boundary for multiple payment
+        # attempts. Payment IDs identify attempts, not distinct recovery opportunities.
+        episode_reference = event.order_id or event.payment_link_id or event.payment_id
+    elif workflow is WorkflowType.FAILED_SUBSCRIPTION:
+        episode_reference = event.payment_id or event.subscription_id
+    else:
+        episode_reference = event.invoice_id
     episode_key = None
     if episode_reference:
         material = ":".join(
@@ -132,7 +142,6 @@ def select_case_identity(event: RevenueRiskEvent) -> CaseIdentity | None:
                 event.merchant_id,
                 workflow.value,
                 subject_type.value,
-                subject_id,
                 episode_reference,
             )
         )
@@ -146,6 +155,29 @@ def select_case_identity(event: RevenueRiskEvent) -> CaseIdentity | None:
 
 
 def diagnose_event(event: RevenueRiskEvent) -> Diagnosis | None:
+    if event.event_type == "invoice.overdue" and event.invoice_id:
+        return Diagnosis(
+            code="INVOICE_OVERDUE",
+            confidence_basis_points=10_000,
+            candidates=(
+                CandidateAction(
+                    action_type=ActionType.SEND_REMINDER,
+                    recovery_probability_basis_points=6_500,
+                    expected_net_recovery_minor=event.amount_minor * 6_000 // 10_000,
+                    rank=1,
+                    target=event.invoice_id,
+                    channel=ContactChannel.EMAIL,
+                ),
+                CandidateAction(
+                    action_type=ActionType.ESCALATE_HUMAN,
+                    recovery_probability_basis_points=1_000,
+                    expected_net_recovery_minor=0,
+                    rank=2,
+                    target=event.invoice_id,
+                ),
+                _no_action(event, 3),
+            ),
+        )
     category = event.normalized_failure_category
     if category is NormalizedFailureCategory.NONE:
         return None
