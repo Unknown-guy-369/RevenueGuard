@@ -36,8 +36,16 @@ celery_app.conf.update(
             "task": "revenueguard.actions.reconcile_unknown",
             "schedule": 30.0,
         },
+        "reevaluate-due-deferred-cases": {
+            "task": "revenueguard.cases.reevaluate_deferred",
+            "schedule": 30.0,
+        },
         "maintain-durable-promises": {
             "task": "revenueguard.playbooks.maintain_promises",
+            "schedule": 60.0,
+        },
+        "maintain-portfolio-intelligence": {
+            "task": "revenueguard.portfolio.maintain",
             "schedule": 60.0,
         },
     },
@@ -47,6 +55,8 @@ celery_app.conf.update(
         "revenueguard.actions.dispatch_pending": {"queue": "action_dispatch"},
         "revenueguard.actions.execute": {"queue": "action_execution"},
         "revenueguard.actions.reconcile_unknown": {"queue": "action_reconciliation"},
+        "revenueguard.cases.reevaluate_deferred": {"queue": "case_reevaluation"},
         "revenueguard.playbooks.maintain_promises": {"queue": "playbook_maintenance"},
+        "revenueguard.portfolio.maintain": {"queue": "portfolio_maintenance"},
     },
 )

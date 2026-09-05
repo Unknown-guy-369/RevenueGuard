@@ -411,3 +411,113 @@ async def test_current_policy_and_provider_truth_are_rechecked_before_execution(
         assert result.reason_code == "PRE_EXECUTION_ALREADY_PAID"
         assert await session.scalar(select(func.count()).select_from(ActionAttempt)) == 0
         assert await ActionRepository(session).recovered_totals(merchant_id=merchant_id) == ()
+
+
+async def test_retry_rechecks_provider_truth_before_starting_another_attempt(
+    phase4_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    merchant_id = "merchant_paid_before_retry"
+    action_id = await _seed_authorized_action(phase4_factory, merchant_id=merchant_id)
+    lease_token = await _claim_and_prepare(
+        phase4_factory,
+        merchant_id=merchant_id,
+        action_id=action_id,
+    )
+    async with phase4_factory.begin() as session:
+        first_result = await ActionExecutionService(
+            ActionRepository(session), RecoveryRepository(session)
+        ).record_execution_result(
+            merchant_id=merchant_id,
+            action_id=action_id,
+            lease_token=lease_token,
+            result=ProviderExecutionResult(
+                status=ActionStatus.FAILED,
+                evidence_source=EvidenceSource.PROVIDER_RESPONSE,
+                observed_at=NOW + timedelta(seconds=2),
+                response_category="RATE_LIMITED",
+                provider_status_code=429,
+                error_code="PROVIDER_RATE_LIMITED",
+                retryable=True,
+            ),
+        )
+        assert first_result.action_status is ActionStatus.PENDING
+        subscription = await session.get(Subscription, (merchant_id, "subscription_001"))
+        assert subscription is not None
+        subscription.status = "PAID"
+        subscription.provider_updated_at = NOW + timedelta(seconds=3)
+
+    async with phase4_factory.begin() as session:
+        claims = await ActionRepository(session).claim_due_actions(
+            now=NOW + timedelta(seconds=10),
+            lease_for=timedelta(minutes=1),
+            limit=10,
+        )
+        assert len(claims) == 1
+        result = await ActionExecutionService(
+            ActionRepository(session), RecoveryRepository(session)
+        ).prepare_execution(
+            merchant_id=merchant_id,
+            action_id=action_id,
+            lease_token=claims[0].lease_token,
+            started_at=NOW + timedelta(seconds=11),
+        )
+        assert not isinstance(result, PreparedExecution)
+        assert result.case_state is CaseState.STOPPED
+        assert result.reason_code == "PRE_EXECUTION_ALREADY_PAID"
+        assert await session.scalar(select(func.count()).select_from(ActionAttempt)) == 1
+
+
+async def test_unverified_accepted_action_escalates_after_verification_deadline(
+    phase4_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    merchant_id = "merchant_verification_expired"
+    action_id = await _seed_authorized_action(phase4_factory, merchant_id=merchant_id)
+    lease_token = await _claim_and_prepare(
+        phase4_factory,
+        merchant_id=merchant_id,
+        action_id=action_id,
+    )
+    async with phase4_factory.begin() as session:
+        accepted = await ActionExecutionService(
+            ActionRepository(session), RecoveryRepository(session)
+        ).record_execution_result(
+            merchant_id=merchant_id,
+            action_id=action_id,
+            lease_token=lease_token,
+            result=ProviderExecutionResult(
+                status=ActionStatus.SUCCEEDED,
+                evidence_source=EvidenceSource.PROVIDER_RESPONSE,
+                observed_at=NOW + timedelta(seconds=2),
+                response_category="API_ACCEPTED",
+                provider_object_id="plink_verification_expired",
+                response_reference="razorpay/payment_links/plink_verification_expired",
+                provider_status_code=200,
+            ),
+        )
+        assert accepted.case_state is CaseState.VERIFYING
+
+    async with phase4_factory.begin() as session:
+        expired = await ActionExecutionService(
+            ActionRepository(session), RecoveryRepository(session)
+        ).record_lookup(
+            merchant_id=merchant_id,
+            action_id=action_id,
+            result=ProviderLookupResult(
+                status=ActionStatus.UNKNOWN,
+                evidence_source=EvidenceSource.PROVIDER_LOOKUP,
+                evidence_reference="razorpay/payment_links/plink_verification_expired",
+                observed_at=NOW + timedelta(hours=1, seconds=3),
+                is_authoritative=False,
+                provider_object_id="plink_verification_expired",
+                reason_code="PROVIDER_STILL_PENDING",
+            ),
+        )
+        assert expired.action_status is ActionStatus.UNKNOWN
+        assert expired.case_state is CaseState.ESCALATED
+        action = await ActionRepository(session).get_action(
+            merchant_id=merchant_id,
+            action_id=action_id,
+        )
+        assert action is not None
+        assert action.dead_lettered_at == NOW + timedelta(hours=1, seconds=3)
+        assert await ActionRepository(session).recovered_totals(merchant_id=merchant_id) == ()

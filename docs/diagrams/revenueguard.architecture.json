@@ -1,0 +1,332 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "RevenueGuard — System Architecture",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1300,
+      740
+    ]
+  },
+  "components": [
+    {
+      "id": "event-sources",
+      "type": "external",
+      "label": "Revenue events",
+      "sublabel": "Razorpay / merchant / simulator",
+      "tag": "TEST MODE",
+      "pos": [
+        20,
+        300
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "event-api",
+      "type": "security",
+      "label": "FastAPI gateway",
+      "sublabel": "Raw signature + merchant scope",
+      "tag": "VERIFY → PERSIST → ACK",
+      "pos": [
+        285,
+        300
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "event-dispatch",
+      "type": "messagebus",
+      "label": "Inbox → Celery / Redis",
+      "sublabel": "Durable dispatch; replay; leases",
+      "tag": "AT LEAST ONCE",
+      "pos": [
+        550,
+        300
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "case-engine",
+      "type": "backend",
+      "label": "Recovery case engine",
+      "sublabel": "Normalize / correlate / transition",
+      "tag": "THREE CORE PLAYBOOKS",
+      "pos": [
+        815,
+        300
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "policy-gate",
+      "type": "security",
+      "label": "Deterministic policy",
+      "sublabel": "Consent / ceilings / current state",
+      "tag": "FINAL AUTHORIZATION",
+      "pos": [
+        1080,
+        300
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "operator-web",
+      "type": "frontend",
+      "label": "Next.js dashboard",
+      "sublabel": "Cases / reviews / Simulation Lab",
+      "tag": "MERCHANT OPERATOR",
+      "pos": [
+        285,
+        50
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "case-intelligence",
+      "type": "backend",
+      "label": "Bounded LangGraph",
+      "sublabel": "Diagnose / rank / explain",
+      "tag": "ADVISORY + SAFE FALLBACK",
+      "pos": [
+        815,
+        50
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "portfolio-playbooks",
+      "type": "backend",
+      "label": "Portfolio + receivables",
+      "sublabel": "Incidents / promises / disputes",
+      "tag": "DURABLE WAKEUPS",
+      "pos": [
+        1080,
+        50
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "financial-store",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "Durable financial + case records",
+      "tag": "AUTHORITATIVE STORE",
+      "pos": [
+        285,
+        560
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "outcome-verifier",
+      "type": "backend",
+      "label": "Outcome verification",
+      "sublabel": "Signed events + provider lookup",
+      "tag": "UNKNOWN → ESCALATE",
+      "pos": [
+        550,
+        560
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "provider-boundary",
+      "type": "external",
+      "label": "Provider adapters",
+      "sublabel": "Razorpay links / synthetic actions",
+      "tag": "NO LIVE CONTACT CHANNEL",
+      "pos": [
+        815,
+        560
+      ],
+      "size": [
+        185,
+        84
+      ]
+    },
+    {
+      "id": "action-executor",
+      "type": "backend",
+      "label": "Action outbox + executor",
+      "sublabel": "Stable keys / attempt counters",
+      "tag": "POLICY CHECK EACH ATTEMPT",
+      "pos": [
+        1080,
+        560
+      ],
+      "size": [
+        185,
+        84
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "signed-input",
+      "from": "event-sources",
+      "to": "event-api",
+      "label": "events",
+      "variant": "emphasis"
+    },
+    {
+      "id": "persisted-dispatch",
+      "from": "event-api",
+      "to": "event-dispatch",
+      "label": "stored inbox",
+      "variant": "emphasis"
+    },
+    {
+      "id": "async-delivery",
+      "from": "event-dispatch",
+      "to": "case-engine",
+      "label": "async jobs",
+      "variant": "emphasis"
+    },
+    {
+      "id": "candidate-policy",
+      "from": "case-engine",
+      "to": "policy-gate",
+      "label": "candidates",
+      "variant": "emphasis"
+    },
+    {
+      "id": "operator-commands",
+      "from": "operator-web",
+      "to": "event-api",
+      "label": "scoped API",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "advisory-output",
+      "from": "case-intelligence",
+      "to": "case-engine",
+      "label": "typed advice",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "portfolio-constraints",
+      "from": "portfolio-playbooks",
+      "to": "policy-gate",
+      "label": "constraints",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "authorized-intent",
+      "from": "policy-gate",
+      "to": "action-executor",
+      "label": "PROCEED",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "provider-command",
+      "from": "action-executor",
+      "to": "provider-boundary",
+      "label": "execute",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "provider-evidence",
+      "from": "provider-boundary",
+      "to": "outcome-verifier",
+      "label": "evidence",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "verified-persistence",
+      "from": "outcome-verifier",
+      "to": "financial-store",
+      "label": "outcomes",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "gateway-persistence",
+      "from": "event-api",
+      "to": "financial-store",
+      "label": "SQL / ORM",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "verification-feedback",
+      "from": "outcome-verifier",
+      "to": "case-engine",
+      "label": "reconcile",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Implemented scope",
+      "items": [
+        "Failed subscriptions; degradation deferral; receivables and promises.",
+        "All application services persist through SQLAlchemy; Alembic manages schema.",
+        "Next.js + FastAPI + worker; Compose runs PostgreSQL and Redis."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Safety and control",
+      "items": [
+        "PROCEED / DEFER / SKIP / STOP / REQUIRE_HUMAN; review and wakeup recheck policy.",
+        "API acceptance is not recovery. UNKNOWN blocks equivalent actions.",
+        "Money uses integer minor units; synthetic results are excluded from merchant totals."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Target architecture still planned",
+      "items": [
+        "Complete portfolio governor and cross-workflow contact coordination.",
+        "SHA-256 audit ledger, full telemetry, calibrated ML and held-out evaluation.",
+        "Real contact adapters, extension playbooks and production SQS mapping."
+      ]
+    }
+  ]
+}

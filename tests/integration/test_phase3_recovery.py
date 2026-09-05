@@ -554,6 +554,33 @@ async def test_deferred_case_is_re_evaluated_against_current_policy_and_provider
         assert resumed[0].receipt_id == "receipt_resumed"
 
 
+async def test_due_deferred_cases_are_reevaluated_by_the_worker(
+    phase3_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    merchant_id = "merchant_deferred_worker"
+    await _seed_merchant(phase3_factory, merchant_id)
+    event = await _seed_failure_event(phase3_factory, merchant_id=merchant_id)
+    async with phase3_factory.begin() as session:
+        initial = await RecoveryApplicationService(
+            RecoveryRepository(session),
+            clock=lambda: NOW,
+        ).process_event(
+            merchant_id=merchant_id,
+            normalized_event_id=event.id,
+        )
+        assert initial.case_state is CaseState.DEFERRED
+
+    monkeypatch.setattr(worker_tasks, "session_factory", phase3_factory)
+
+    assert await worker_tasks._reevaluate_deferred_cases() == {"reevaluated": 1}
+
+    async with phase3_factory() as session:
+        case = await session.get(RecoveryCase, (merchant_id, initial.case_id))
+        assert case is not None
+        assert case.state == CaseState.READY.value
+
+
 async def test_human_approval_is_action_bound_and_rechecked_before_ready(
     phase3_factory: async_sessionmaker[AsyncSession],
 ) -> None:

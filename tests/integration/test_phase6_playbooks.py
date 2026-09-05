@@ -86,6 +86,16 @@ class DisputeProvider:
         return {"intent": "DISPUTE", "confidence_basis_points": 9_900}
 
 
+class AlreadyPaidProvider:
+    @property
+    def model_version(self) -> str:
+        return "phase6-already-paid-test-1"
+
+    async def extract(self, *, text: str, max_output_tokens: int) -> Mapping[str, object]:
+        del text, max_output_tokens
+        return {"intent": "ALREADY_PAID", "confidence_basis_points": 9_900}
+
+
 @pytest.fixture
 async def phase6_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     administration_engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
@@ -228,7 +238,13 @@ async def test_promise_survives_restart_and_blocks_stale_authorized_outreach(
         )
         assert isinstance(disposition, ExecutionDisposition)
         assert disposition.reason_code == "PRE_EXECUTION_ACTIVE_PROMISE_TO_PAY"
-        assert disposition.case_state is CaseState.DECISION_PENDING
+        assert disposition.case_state is CaseState.DEFERRED
+        recovery_case = (
+            await session.scalars(
+                select(RecoveryCase).where(RecoveryCase.merchant_id == merchant_id)
+            )
+        ).one()
+        assert recovery_case.next_evaluation_at == datetime(2026, 8, 31, tzinfo=UTC)
 
     async with phase6_factory.begin() as session:
         service = ReceivablesPlaybookService(
@@ -422,6 +438,57 @@ async def test_dispute_freezes_automation_and_creates_human_escalation(
         assert disposition.reason_code == "PRE_EXECUTION_PAYMENT_DISPUTED"
 
 
+async def test_already_paid_claim_freezes_outreach_until_provider_verification(
+    phase6_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    merchant_id = "merchant_claimed_paid"
+    extractor = BoundedPromiseExtractor(AlreadyPaidProvider())
+    await _seed_merchant(phase6_factory, merchant_id)
+    await _ingest_invoice(phase6_factory, merchant_id=merchant_id, extractor=extractor)
+
+    async with phase6_factory.begin() as session:
+        result = await ReceivablesPlaybookService(
+            PlaybookRepository(session),
+            RecoveryRepository(session),
+            extractor=extractor,
+            clock=lambda: NOW + timedelta(minutes=1),
+        ).record_customer_response(
+            merchant_id=merchant_id,
+            source_response_id="response-already-paid-001",
+            invoice_id="invoice_001",
+            body="We already paid this invoice.",
+        )
+        invoice = await session.get(Invoice, (merchant_id, "invoice_001"))
+        escalation = (
+            await session.scalars(
+                select(ReceivableEscalation).where(ReceivableEscalation.merchant_id == merchant_id)
+            )
+        ).one()
+        assert result.disposition == "AUTHORITATIVE_VERIFICATION_REQUIRED"
+        assert invoice is not None and invoice.status == "ESCALATED"
+        assert invoice.outstanding_amount_minor == 10_000
+        assert invoice.automation_frozen_at == NOW + timedelta(minutes=1)
+        assert escalation.reason_code == "CUSTOMER_REPORTED_ALREADY_PAID"
+
+        claims = await ActionRepository(session).claim_due_actions(
+            now=NOW + timedelta(minutes=2),
+            lease_for=timedelta(minutes=1),
+            limit=10,
+        )
+        assert len(claims) == 1
+        disposition = await ActionExecutionService(
+            ActionRepository(session), RecoveryRepository(session)
+        ).prepare_execution(
+            merchant_id=merchant_id,
+            action_id=claims[0].action_id,
+            lease_token=claims[0].lease_token,
+            started_at=NOW + timedelta(minutes=2),
+        )
+        assert isinstance(disposition, ExecutionDisposition)
+        assert disposition.case_state is CaseState.STOPPED
+        assert disposition.reason_code == "PRE_EXECUTION_SUBJECT_CANCELLED"
+
+
 async def test_receivable_recovery_requires_authoritative_provider_evidence(
     phase6_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -490,6 +557,29 @@ async def test_degradation_incident_is_evidence_backed_and_resumes_gradually(
     merchant_id = "merchant_degradation"
     await _seed_merchant(phase6_factory, merchant_id)
     await _seed_issuer_failure_case(phase6_factory, merchant_id)
+    async with phase6_factory.begin() as session:
+        session.add(
+            RecoveryCase(
+                merchant_id=merchant_id,
+                id="case_second_issuer_failure",
+                schema_version="1.0",
+                workflow_type="FAILED_SUBSCRIPTION",
+                subject_type="SUBSCRIPTION",
+                subject_id="subscription_second_issuer_failure",
+                customer_id="customer_001",
+                revenue_at_risk_minor=20_000,
+                currency="INR",
+                state="DEFERRED",
+                state_version=4,
+                diagnosis="ISSUER_TEMPORARILY_UNAVAILABLE",
+                diagnosis_confidence_basis_points=8_000,
+                retry_count=1,
+                contact_count=0,
+                next_evaluation_at=NOW + timedelta(hours=1),
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
     policy = DegradationPolicy()
 
     async with phase6_factory.begin() as session:
@@ -516,16 +606,17 @@ async def test_degradation_incident_is_evidence_backed_and_resumes_gradually(
                 select(PortfolioIncident).where(PortfolioIncident.merchant_id == merchant_id)
             )
         ).one()
-        case = (
+        cases = (
             await session.scalars(
                 select(RecoveryCase).where(RecoveryCase.merchant_id == merchant_id)
             )
-        ).one()
+        ).all()
         assert incident.status == "ACTIVE"
         assert incident.current_failure_rate_basis_points == 8_000
         assert incident.threshold_version == policy.version
         assert incident.clear_window_count == 0
-        assert case.active_incident_id == incident.id
+        assert len(cases) == 2
+        assert all(case.active_incident_id == incident.id for case in cases)
         assert await session.scalar(select(func.count()).select_from(PortfolioIncident)) == 1
 
     for clear_index, evaluated_at in enumerate(
@@ -560,21 +651,26 @@ async def test_degradation_incident_is_evidence_backed_and_resumes_gradually(
                 select(PortfolioIncident).where(PortfolioIncident.merchant_id == merchant_id)
             )
         ).one()
-        link = (
+        links = (
             await session.scalars(
-                select(IncidentCaseLink).where(IncidentCaseLink.merchant_id == merchant_id)
+                select(IncidentCaseLink)
+                .where(IncidentCaseLink.merchant_id == merchant_id)
+                .order_by(IncidentCaseLink.recovery_case_id)
             )
-        ).one()
-        case = (
+        ).all()
+        cases = (
             await session.scalars(
                 select(RecoveryCase).where(RecoveryCase.merchant_id == merchant_id)
             )
-        ).one()
+        ).all()
         assert incident.status == "RESOLVED"
         assert incident.resolution_reason == "FAILURE_RATE_RECOVERED"
-        assert link.resume_after == NOW + timedelta(minutes=32)
-        assert case.active_incident_id is None
-        assert case.next_evaluation_at == link.resume_after
+        assert [link.resume_after for link in links] == [
+            NOW + timedelta(minutes=32),
+            NOW + timedelta(minutes=32, seconds=30),
+        ]
+        assert all(case.active_incident_id is None for case in cases)
+        assert {case.next_evaluation_at for case in cases} == {link.resume_after for link in links}
         assert await session.scalar(select(func.count()).select_from(PaymentOutcomeRow)) == 50
 
 

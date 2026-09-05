@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, time
 from enum import StrEnum
 from typing import Any, cast
@@ -13,6 +13,7 @@ from revenueguard_domain import (
     CaseTransition,
     ConsentState,
     ContactChannel,
+    CustomerIntervention,
     HumanReviewRequest,
     IncidentConstraint,
     IncidentScope,
@@ -24,7 +25,7 @@ from revenueguard_domain import (
 )
 from revenueguard_domain import DecisionReceipt as DomainDecisionReceipt
 from revenueguard_domain import RecoveryCase as DomainRecoveryCase
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,8 +35,10 @@ from revenueguard_integrations.persistence.models import (
 )
 from revenueguard_integrations.persistence.models import (
     CommunicationConsent,
+    Customer,
     DecisionReceipt,
     HumanReview,
+    IncidentCaseLink,
     Invoice,
     Merchant,
     MerchantPolicyVersion,
@@ -48,7 +51,13 @@ from revenueguard_integrations.persistence.models import (
     Subscription,
 )
 from revenueguard_integrations.persistence.models import (
+    CustomerIntervention as CustomerInterventionRow,
+)
+from revenueguard_integrations.persistence.models import (
     ModelPrediction as ModelPredictionRow,
+)
+from revenueguard_integrations.persistence.models import (
+    RecoveryAction as RecoveryActionRow,
 )
 from revenueguard_integrations.persistence.status_ordering import compare_provider_status
 
@@ -89,6 +98,14 @@ class AuthoritativeFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomerContactSnapshot:
+    aggregate_contact_count: int
+    active_case_ids: tuple[str, ...]
+    active_intervention_id: str | None
+    active_intervention_action_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceOrder:
     disposition: EvidenceDisposition
     reason_code: str
@@ -105,6 +122,174 @@ class RecoveryRepository:
         """Expose the caller-owned transaction to closely related repositories."""
 
         return self._session
+
+    async def customer_contact_snapshot(
+        self,
+        *,
+        merchant_id: str,
+        customer_id: str,
+        for_update: bool = False,
+    ) -> CustomerContactSnapshot:
+        customer_statement = select(Customer.id).where(
+            Customer.merchant_id == merchant_id,
+            Customer.id == customer_id,
+        )
+        if for_update:
+            await self._session.scalar(
+                select(
+                    func.pg_advisory_xact_lock(
+                        func.hashtextextended(f"{merchant_id}:{customer_id}", 1)
+                    )
+                )
+            )
+        if await self._session.scalar(customer_statement) is None:
+            raise LookupError("tenant-scoped customer does not exist")
+        aggregate = await self._session.scalar(
+            select(func.coalesce(func.sum(RecoveryCase.contact_count), 0)).where(
+                RecoveryCase.merchant_id == merchant_id,
+                RecoveryCase.customer_id == customer_id,
+            )
+        )
+        active_case_ids = tuple(
+            (
+                await self._session.scalars(
+                    select(RecoveryCase.id)
+                    .where(
+                        RecoveryCase.merchant_id == merchant_id,
+                        RecoveryCase.customer_id == customer_id,
+                        RecoveryCase.state.not_in(
+                            (CaseState.RECOVERED.value, CaseState.STOPPED.value)
+                        ),
+                    )
+                    .order_by(RecoveryCase.id)
+                )
+            ).all()
+        )
+        active_intervention = await self._session.scalar(
+            select(CustomerInterventionRow).where(
+                CustomerInterventionRow.merchant_id == merchant_id,
+                CustomerInterventionRow.customer_id == customer_id,
+                CustomerInterventionRow.status == "ACTIVE",
+            )
+        )
+        return CustomerContactSnapshot(
+            aggregate_contact_count=int(aggregate or 0),
+            active_case_ids=active_case_ids,
+            active_intervention_id=active_intervention.id if active_intervention else None,
+            active_intervention_action_id=(
+                active_intervention.recovery_action_id if active_intervention else None
+            ),
+        )
+
+    async def store_customer_intervention(
+        self, intervention: CustomerIntervention
+    ) -> CustomerInterventionRow:
+        existing = await self._session.scalar(
+            select(CustomerInterventionRow).where(
+                CustomerInterventionRow.merchant_id == intervention.merchant_id,
+                CustomerInterventionRow.recovery_action_id == intervention.action_id,
+            )
+        )
+        if existing is not None:
+            if (
+                existing.customer_id != intervention.customer_id
+                or existing.owner_case_id != intervention.owner_case_id
+                or tuple(existing.coordinated_case_ids) != intervention.coordinated_case_ids
+            ):
+                raise RecoveryPersistenceError(
+                    "INTERVENTION_IDEMPOTENCY_CONFLICT",
+                    "the recovery action is already attached to a different intervention",
+                )
+            return existing
+        row = CustomerInterventionRow(
+            merchant_id=intervention.merchant_id,
+            id=intervention.intervention_id,
+            customer_id=intervention.customer_id,
+            owner_case_id=intervention.owner_case_id,
+            recovery_action_id=intervention.action_id,
+            coordinated_case_ids=list(intervention.coordinated_case_ids),
+            status=intervention.status.value,
+            cooldown_until=intervention.cooldown_until,
+            model_version=intervention.model_version,
+            policy_version=intervention.policy_version,
+            closed_at=intervention.closed_at,
+            close_reason=intervention.close_reason,
+            created_at=intervention.created_at,
+            updated_at=intervention.updated_at,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return row
+
+    async def coordinate_case_with_active_intervention(
+        self,
+        *,
+        merchant_id: str,
+        customer_id: str,
+        case_id: str,
+        updated_at: datetime,
+    ) -> None:
+        row = await self._session.scalar(
+            select(CustomerInterventionRow)
+            .where(
+                CustomerInterventionRow.merchant_id == merchant_id,
+                CustomerInterventionRow.customer_id == customer_id,
+                CustomerInterventionRow.status == "ACTIVE",
+            )
+            .with_for_update()
+        )
+        if row is None:
+            return
+        coordinated = tuple(sorted({*row.coordinated_case_ids, case_id}))
+        if coordinated != tuple(row.coordinated_case_ids):
+            row.coordinated_case_ids = list(coordinated)
+            row.updated_at = _utc(updated_at)
+            await self._session.flush()
+
+    async def close_expired_customer_interventions(self, *, due_at: datetime, limit: int) -> int:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        at = _utc(due_at)
+        rows = (
+            await self._session.scalars(
+                select(CustomerInterventionRow)
+                .join(
+                    RecoveryActionRow,
+                    (RecoveryActionRow.merchant_id == CustomerInterventionRow.merchant_id)
+                    & (RecoveryActionRow.id == CustomerInterventionRow.recovery_action_id),
+                )
+                .where(
+                    CustomerInterventionRow.status == "ACTIVE",
+                    CustomerInterventionRow.cooldown_until <= at,
+                    RecoveryActionRow.status.in_(("SUCCEEDED", "FAILED")),
+                )
+                .order_by(
+                    CustomerInterventionRow.cooldown_until,
+                    CustomerInterventionRow.merchant_id,
+                    CustomerInterventionRow.id,
+                )
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+        for row in rows:
+            action_status = await self._session.scalar(
+                select(RecoveryActionRow.status).where(
+                    RecoveryActionRow.merchant_id == row.merchant_id,
+                    RecoveryActionRow.id == row.recovery_action_id,
+                )
+            )
+            row.status = "CLOSED"
+            row.closed_at = at
+            row.close_reason = (
+                "CONTACT_COOLDOWN_COMPLETED"
+                if action_status == "SUCCEEDED"
+                else "CONTACT_ACTION_FAILED"
+            )
+            row.updated_at = at
+        if rows:
+            await self._session.flush()
+        return len(rows)
 
     async def publish_policy(
         self,
@@ -189,12 +374,10 @@ class RecoveryRepository:
         return _case_from_row(row) if row is not None else None
 
     async def lock_merchant(self, *, merchant_id: str) -> None:
-        merchant = (
-            await self._session.scalars(
-                select(Merchant).where(Merchant.id == merchant_id).with_for_update()
-            )
-        ).one_or_none()
-        if merchant is None:
+        await self._session.scalar(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(merchant_id, 0)))
+        )
+        if await self._session.get(Merchant, merchant_id) is None:
             raise LookupError("merchant does not exist")
 
     async def get_normalized_event(
@@ -406,6 +589,52 @@ class RecoveryRepository:
             )
         ).one()
 
+    async def record_execution_attempt_counters(
+        self,
+        *,
+        case: DomainRecoveryCase,
+        retry_increment: int,
+        contact_increment: int,
+        occurred_at: datetime,
+    ) -> DomainRecoveryCase:
+        if retry_increment not in {0, 1} or contact_increment not in {0, 1}:
+            raise ValueError("attempt counter increments must be zero or one")
+        if retry_increment + contact_increment > 1:
+            raise ValueError("one attempt cannot be both a retry and customer contact")
+        if retry_increment == 0 and contact_increment == 0:
+            return case
+        at = _utc(occurred_at)
+        updated = replace(
+            case,
+            retry_count=case.retry_count + retry_increment,
+            contact_count=case.contact_count + contact_increment,
+            updated_at=at,
+        )
+        result = cast(
+            CursorResult[Any],
+            await self._session.execute(
+                update(RecoveryCase)
+                .where(
+                    RecoveryCase.merchant_id == case.merchant_id,
+                    RecoveryCase.id == case.case_id,
+                    RecoveryCase.state == case.state.value,
+                    RecoveryCase.state_version == case.state_version,
+                )
+                .values(
+                    retry_count=updated.retry_count,
+                    contact_count=updated.contact_count,
+                    updated_at=updated.updated_at,
+                )
+            ),
+        )
+        if result.rowcount != 1:
+            raise StaleRecoveryCaseError(
+                "STALE_CASE_VERSION",
+                "case changed before execution attempt counters were persisted",
+            )
+        await self._session.flush()
+        return updated
+
     async def get_review(
         self,
         *,
@@ -514,6 +743,11 @@ class RecoveryRepository:
             resulting_state=receipt.resulting_state.value,
             audit_entry_id=receipt.audit_entry_id,
             model_prediction_ids=list(receipt.model_prediction_ids),
+            scoring_model_version=receipt.scoring_model_version,
+            scoring_feature_version=receipt.scoring_feature_version,
+            scoring_economics_version=receipt.scoring_economics_version,
+            scoring_artifact_classification=receipt.scoring_artifact_classification,
+            scoring_fallback_reason=receipt.scoring_fallback_reason,
             schema_version=receipt.schema_version,
             created_at=receipt.created_at,
         )
@@ -607,7 +841,12 @@ class RecoveryRepository:
         return consent, opted_out
 
     async def active_incidents(
-        self, *, merchant_id: str, evaluated_at: datetime
+        self,
+        *,
+        merchant_id: str,
+        evaluated_at: datetime,
+        case_id: str | None = None,
+        diagnosis_code: str | None = None,
     ) -> tuple[IncidentConstraint, ...]:
         rows = list(
             (
@@ -621,6 +860,44 @@ class RecoveryRepository:
                 )
             ).all()
         )
+        if case_id is not None:
+            linked_incident_ids = set(
+                (
+                    await self._session.scalars(
+                        select(IncidentCaseLink.incident_id).where(
+                            IncidentCaseLink.merchant_id == merchant_id,
+                            IncidentCaseLink.recovery_case_id == case_id,
+                        )
+                    )
+                ).all()
+            )
+            applicable_rows = []
+            newly_matched = []
+            for row in rows:
+                if row.scope in {"ALL_AUTOMATION", "CONTACT_CHANNEL"}:
+                    applicable_rows.append(row)
+                elif row.id in linked_incident_ids:
+                    applicable_rows.append(row)
+                elif _incident_matches_diagnosis(row, diagnosis_code):
+                    applicable_rows.append(row)
+                    newly_matched.append(row)
+            for row in newly_matched:
+                await self._session.execute(
+                    insert(IncidentCaseLink)
+                    .values(
+                        merchant_id=merchant_id,
+                        incident_id=row.id,
+                        recovery_case_id=case_id,
+                        attached_at=evaluated_at,
+                    )
+                    .on_conflict_do_nothing()
+                )
+            if newly_matched:
+                case = await self._session.get(RecoveryCase, (merchant_id, case_id))
+                if case is not None and case.active_incident_id is None:
+                    case.active_incident_id = sorted(newly_matched, key=lambda item: item.id)[0].id
+                await self._session.flush()
+            rows = applicable_rows
         return tuple(
             IncidentConstraint(
                 incident_id=row.id,
@@ -826,6 +1103,23 @@ def _provider_facts(row: Payment | Subscription | None) -> AuthoritativeFacts:
         row.provider_updated_at or row.provider_occurred_at,
         row.status,
     )
+
+
+def _incident_matches_diagnosis(incident: PortfolioIncident, diagnosis_code: str | None) -> bool:
+    if diagnosis_code is None:
+        return False
+    normalized = diagnosis_code.upper()
+    if incident.scope == IncidentScope.ISSUER.value:
+        return normalized == "ISSUER_TEMPORARILY_UNAVAILABLE"
+    if incident.scope == IncidentScope.GATEWAY.value:
+        return normalized == "GATEWAY_TEMPORARILY_UNAVAILABLE"
+    if incident.scope == IncidentScope.PAYMENT_RAIL.value:
+        return normalized in {
+            "ISSUER_TEMPORARILY_UNAVAILABLE",
+            "GATEWAY_TEMPORARILY_UNAVAILABLE",
+            "UNKNOWN_PAYMENT_FAILURE",
+        }
+    return False
 
 
 def _policy_from_document(document: dict[str, Any]) -> MerchantPolicySnapshot:

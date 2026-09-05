@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
@@ -274,28 +273,40 @@ def assess_payment_degradation(
     evaluated = _utc("evaluated_at", evaluated_at)
     baseline_start = evaluated - policy.baseline_window
     current_start = evaluated - policy.current_window
-    grouped: dict[
-        tuple[str, str, str, str],
-        dict[str, list[PaymentOutcomeObservation]],
-    ] = defaultdict(lambda: {"baseline": [], "current": []})
-    for observation in observations:
-        if observation.occurred_at > evaluated or observation.occurred_at < baseline_start:
-            continue
-        key = (
-            observation.merchant_id,
-            observation.payment_method,
-            observation.issuer_family,
-            observation.error_family,
-        )
-        bucket = "current" if observation.occurred_at >= current_start else "baseline"
-        grouped[key][bucket].append(observation)
+    in_window = tuple(
+        observation
+        for observation in observations
+        if baseline_start <= observation.occurred_at <= evaluated
+    )
+    dimensions = sorted(
+        {
+            (
+                observation.merchant_id,
+                observation.payment_method,
+                observation.issuer_family,
+                observation.error_family,
+            )
+            for observation in in_window
+            if not observation.succeeded
+        }
+    )
 
     assessments: list[DegradationAssessment] = []
-    for key, windows in sorted(grouped.items()):
-        baseline_total = len(windows["baseline"])
-        current_total = len(windows["current"])
-        baseline_failures = sum(not item.succeeded for item in windows["baseline"])
-        current_failures = sum(not item.succeeded for item in windows["current"])
+    for key in dimensions:
+        relevant = tuple(
+            observation
+            for observation in in_window
+            if observation.merchant_id == key[0]
+            and observation.payment_method == key[1]
+            and observation.issuer_family == key[2]
+            and (observation.succeeded or observation.error_family == key[3])
+        )
+        baseline = tuple(item for item in relevant if item.occurred_at < current_start)
+        current = tuple(item for item in relevant if item.occurred_at >= current_start)
+        baseline_total = len(baseline)
+        current_total = len(current)
+        baseline_failures = sum(not item.succeeded for item in baseline)
+        current_failures = sum(not item.succeeded for item in current)
         baseline_rate = _rate_basis_points(baseline_failures, baseline_total)
         current_rate = _rate_basis_points(current_failures, current_total)
         increase = current_rate - baseline_rate

@@ -99,6 +99,9 @@ class CandidateAction:
     target: str
     logical_attempt: int = 1
     channel: ContactChannel | None = None
+    action_cost_minor: int = 0
+    risk_penalty_minor: int = 0
+    customer_friction_penalty_minor: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.action_type, ActionType):
@@ -118,6 +121,14 @@ class CandidateAction:
             self.expected_net_recovery_minor, int
         ):
             raise TypeError("expected_net_recovery_minor must be an integer")
+        for name in (
+            "action_cost_minor",
+            "risk_penalty_minor",
+            "customer_friction_penalty_minor",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
         if not self.target:
             raise ValueError("target is required")
         if (
@@ -137,6 +148,9 @@ class CandidateAction:
             "target": self.target,
             "logical_attempt": self.logical_attempt,
             "channel": self.channel.value if self.channel else None,
+            "action_cost_minor": self.action_cost_minor,
+            "risk_penalty_minor": self.risk_penalty_minor,
+            "customer_friction_penalty_minor": self.customer_friction_penalty_minor,
         }
 
 
@@ -280,6 +294,7 @@ class PolicyEvaluationInput:
     approval: HumanReviewRequest | None = None
     unknown_equivalent_action: bool = False
     customer_contact_in_progress: bool = False
+    customer_identity_resolved: bool = True
     active_promise_to_pay: bool = False
     promise_due_at: datetime | None = None
 
@@ -316,6 +331,8 @@ class PolicyEvaluationInput:
             raise TypeError("unknown_equivalent_action must be a boolean")
         if not isinstance(self.customer_contact_in_progress, bool):
             raise TypeError("customer_contact_in_progress must be a boolean")
+        if not isinstance(self.customer_identity_resolved, bool):
+            raise TypeError("customer_identity_resolved must be a boolean")
         if not isinstance(self.active_promise_to_pay, bool):
             raise TypeError("active_promise_to_pay must be a boolean")
         if self.promise_due_at is not None:
@@ -377,6 +394,11 @@ class DecisionReceipt:
     resulting_action_id: str | None = None
     audit_entry_id: str | None = None
     model_prediction_ids: tuple[str, ...] = ()
+    scoring_model_version: str = "NOT_APPLICABLE"
+    scoring_feature_version: str = "NOT_APPLICABLE"
+    scoring_economics_version: str = "NOT_APPLICABLE"
+    scoring_artifact_classification: str = "NOT_APPLICABLE"
+    scoring_fallback_reason: str | None = None
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
@@ -395,6 +417,24 @@ class DecisionReceipt:
             not prediction_id for prediction_id in self.model_prediction_ids
         ):
             raise ValueError("model prediction IDs must be non-empty and unique")
+        for name in (
+            "scoring_model_version",
+            "scoring_feature_version",
+            "scoring_economics_version",
+        ):
+            value = getattr(self, name)
+            if not value or len(value) > 128:
+                raise ValueError(f"{name} must contain 1 to 128 characters")
+        if self.scoring_artifact_classification not in {
+            "SYNTHETIC",
+            "PRODUCTION",
+            "NOT_APPLICABLE",
+        }:
+            raise ValueError("unsupported scoring artifact classification")
+        if self.scoring_fallback_reason is not None and (
+            REASON_PATTERN.fullmatch(self.scoring_fallback_reason) is None
+        ):
+            raise ValueError("scoring fallback reason must be machine-readable")
         object.__setattr__(self, "created_at", _utc("created_at", self.created_at))
 
     def to_dict(self) -> dict[str, object]:
@@ -416,6 +456,13 @@ class DecisionReceipt:
             "resulting_state": self.resulting_state.value,
             "audit_entry_id": self.audit_entry_id,
             "model_prediction_ids": list(self.model_prediction_ids),
+            "scoring": {
+                "model_version": self.scoring_model_version,
+                "feature_version": self.scoring_feature_version,
+                "economics_version": self.scoring_economics_version,
+                "artifact_classification": self.scoring_artifact_classification,
+                "fallback_reason": self.scoring_fallback_reason,
+            },
             "created_at": _format(self.created_at),
         }
 
@@ -526,6 +573,8 @@ def _evaluate_candidate(
     if action_class is ActionClass.RETRY and evaluation.retry_count >= policy.retry_limit:
         return PolicyResult.SKIP, "RETRY_LIMIT_REACHED", None
     if action_class is ActionClass.CUSTOMER_CONTACT:
+        if not evaluation.customer_identity_resolved:
+            return PolicyResult.SKIP, "CUSTOMER_IDENTITY_UNRESOLVED", None
         if evaluation.customer_contact_in_progress:
             return (
                 PolicyResult.DEFER,

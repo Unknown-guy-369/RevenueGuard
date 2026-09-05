@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Never
 
 import pytest
+from revenueguard_domain import EventSource, NormalizedFailureCategory, RevenueRiskEvent
 from revenueguard_integrations.razorpay import UnsupportedRazorpayEventError
 from revenueguard_worker import tasks
 from revenueguard_worker.celery_app import celery_app
@@ -58,6 +59,50 @@ def test_provider_timestamp_falls_back_safely() -> None:
     assert tasks._provider_timestamp({"created_at": 1787632259}, "created_at") == (
         datetime.fromtimestamp(1787632259, UTC)
     )
+
+
+def test_payment_event_becomes_streaming_portfolio_observation() -> None:
+    event = RevenueRiskEvent(
+        event_id="event_001",
+        merchant_id="merchant_001",
+        source=EventSource.RAZORPAY,
+        source_event_id="provider_001",
+        event_type="payment.failed",
+        occurred_at=datetime(2026, 9, 5, 12, tzinfo=UTC),
+        received_at=datetime(2026, 9, 5, 12, 0, 1, tzinfo=UTC),
+        customer_id="customer_001",
+        payment_id="payment_001",
+        order_id="order_001",
+        subscription_id=None,
+        invoice_id=None,
+        payment_link_id=None,
+        amount_minor=10_000,
+        currency="INR",
+        failure_code="GATEWAY_ERROR",
+        normalized_failure_category=NormalizedFailureCategory.GATEWAY_UNAVAILABLE,
+        correlation_id="correlation_001",
+        causation_id=None,
+        source_payload_reference="webhook_events/provider_001",
+    )
+    document = {
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "payment_001",
+                    "method": "upi",
+                    "bank": "HDFC",
+                }
+            }
+        }
+    }
+
+    observation = tasks.payment_outcome_observation(event, document)
+
+    assert observation is not None
+    assert observation.succeeded is False
+    assert observation.payment_method == "UPI"
+    assert observation.issuer_family == "HDFC"
+    assert observation.error_family == "GATEWAY_UNAVAILABLE"
 
 
 def test_unsupported_event_is_dead_lettered_without_repeat_attempts(

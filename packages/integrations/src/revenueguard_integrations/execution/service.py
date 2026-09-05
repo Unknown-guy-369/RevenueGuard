@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Final
@@ -10,18 +10,22 @@ from typing import Final
 from revenueguard_domain import (
     ACTION_CLASSES,
     ActionClass,
+    ActionFingerprintInput,
     ActionStatus,
     ActionType,
     CandidateAction,
     CaseState,
     ContactChannel,
     EvidenceSource,
+    HumanReviewRequest,
+    MerchantPolicySnapshot,
     PolicyDecision,
     PolicyEvaluationInput,
     PolicyResult,
     RecoveryAction,
     RecoveryCase,
     RevenueRiskEvent,
+    ReviewStatus,
     VerifiedOutcome,
     evaluate_policy,
     transition_case,
@@ -37,6 +41,7 @@ from revenueguard_integrations.persistence.models import RecoveryAction as Recov
 _SIGNED_SUCCESS_EVENTS: Final = frozenset(
     {"payment_link.paid", "payment.captured", "subscription.charged"}
 )
+_RECOVERY_CREDIT_ACTIONS: Final = (ActionType.CREATE_PAYMENT_LINK,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +56,13 @@ class ExecutionDisposition:
     action_status: ActionStatus
     case_state: CaseState
     reason_code: str
+
+
+@dataclass(frozen=True, slots=True)
+class FinalPolicyCheck:
+    decision: PolicyDecision
+    policy: MerchantPolicySnapshot
+    evidence_references: tuple[str, ...]
 
 
 class ActionExecutionService:
@@ -94,64 +106,122 @@ class ActionExecutionService:
             raise LookupError("recovery action case does not exist")
         if case.state not in {CaseState.READY, CaseState.EXECUTING}:
             raise ValueError("case is not executable")
-        if case.state is CaseState.READY:
-            policy_decision = await self._final_policy_decision(
-                action=action_row,
-                case=case,
-                evaluated_at=now,
+        policy_check = await self._final_policy_decision(
+            action=action_row,
+            case=case,
+            evaluated_at=now,
+        )
+        policy_decision = policy_check.decision
+        if (
+            policy_decision.result is not PolicyResult.PROCEED
+            or policy_decision.selected_action.action_type.value != action_row.action_type
+        ):
+            policy_reason = next(
+                (code for code in policy_decision.reason_codes if code != "NO_ELIGIBLE_ACTION"),
+                policy_decision.reason_codes[-1],
             )
-            if (
-                policy_decision.result is not PolicyResult.PROCEED
-                or policy_decision.selected_action.action_type.value != action_row.action_type
-            ):
-                reason_code = f"PRE_EXECUTION_{policy_decision.reason_codes[-1]}"
-                await self._actions.cancel_before_execution(
-                    action=action_row,
-                    cancelled_at=now,
-                    reason_code=reason_code,
-                )
+            reason_code = f"PRE_EXECUTION_{policy_reason}"
+            await self._actions.cancel_before_execution(
+                action=action_row,
+                cancelled_at=now,
+                reason_code=reason_code,
+            )
+            if case.state is CaseState.READY:
                 case = await self._transition(
                     case=case,
                     action=action_row,
                     to_state=CaseState.EXECUTING,
                     reason_code="PRE_EXECUTION_POLICY_BLOCKED",
                     occurred_at=now,
+                    policy_version=policy_check.policy.version,
                 )
+            case = await self._transition(
+                case=case,
+                action=action_row,
+                to_state=CaseState.VERIFYING,
+                reason_code=reason_code,
+                occurred_at=now,
+                policy_version=policy_check.policy.version,
+            )
+            if policy_decision.result is PolicyResult.STOP:
                 case = await self._transition(
                     case=case,
                     action=action_row,
-                    to_state=CaseState.VERIFYING,
+                    to_state=CaseState.STOPPED,
                     reason_code=reason_code,
                     occurred_at=now,
+                    terminal_reason=reason_code,
+                    policy_version=policy_check.policy.version,
                 )
-                if policy_decision.result is PolicyResult.STOP:
+            else:
+                case = await self._transition(
+                    case=case,
+                    action=action_row,
+                    to_state=CaseState.DECISION_PENDING,
+                    reason_code=reason_code,
+                    occurred_at=now,
+                    policy_version=policy_check.policy.version,
+                )
+                if policy_decision.result is PolicyResult.DEFER:
                     case = await self._transition(
                         case=case,
                         action=action_row,
-                        to_state=CaseState.STOPPED,
-                        reason_code=reason_code,
+                        to_state=CaseState.POLICY_CHECK,
+                        reason_code="PRE_EXECUTION_POLICY_REEVALUATED",
                         occurred_at=now,
-                        terminal_reason=reason_code,
+                        policy_version=policy_check.policy.version,
                     )
-                else:
                     case = await self._transition(
                         case=case,
                         action=action_row,
-                        to_state=CaseState.DECISION_PENDING,
+                        to_state=CaseState.DEFERRED,
                         reason_code=reason_code,
                         occurred_at=now,
+                        next_evaluation_at=policy_decision.next_evaluation_at,
+                        policy_version=policy_check.policy.version,
                     )
-                return ExecutionDisposition(
-                    action_row.id,
-                    ActionStatus.FAILED,
-                    case.state,
-                    reason_code,
-                )
+                elif policy_decision.result is PolicyResult.REQUIRE_HUMAN:
+                    review = self._build_pre_execution_review(
+                        action=action_row,
+                        case=case,
+                        policy_check=policy_check,
+                        requested_at=now,
+                    )
+                    await self._recovery.store_review(review)
+                    case = await self._transition(
+                        case=case,
+                        action=action_row,
+                        to_state=CaseState.POLICY_CHECK,
+                        reason_code="PRE_EXECUTION_POLICY_REEVALUATED",
+                        occurred_at=now,
+                        policy_version=policy_check.policy.version,
+                    )
+                    case = await self._transition(
+                        case=case,
+                        action=action_row,
+                        to_state=CaseState.ESCALATED,
+                        reason_code=reason_code,
+                        occurred_at=now,
+                        policy_version=policy_check.policy.version,
+                    )
+            return ExecutionDisposition(
+                action_row.id,
+                ActionStatus.FAILED,
+                case.state,
+                reason_code,
+            )
         _, attempt = await self._actions.begin_attempt(
             merchant_id=merchant_id,
             action_id=action_id,
             lease_token=lease_token,
             started_at=now,
+        )
+        action_class = ACTION_CLASSES[ActionType(action_row.action_type)]
+        case = await self._recovery.record_execution_attempt_counters(
+            case=case,
+            retry_increment=int(action_class is ActionClass.RETRY),
+            contact_increment=int(action_class is ActionClass.CUSTOMER_CONTACT),
+            occurred_at=now,
         )
         if case.state is CaseState.READY:
             updated, transition = transition_case(
@@ -164,11 +234,6 @@ class ActionExecutionService:
                 policy_version=action_row.policy_version,
                 occurred_at=now,
             )
-            action_class = ACTION_CLASSES[ActionType(action_row.action_type)]
-            if action_class is ActionClass.RETRY:
-                updated = replace(updated, retry_count=updated.retry_count + 1)
-            if action_class is ActionClass.CUSTOMER_CONTACT:
-                updated = replace(updated, contact_count=updated.contact_count + 1)
             await self._recovery.apply_transition(updated_case=updated, transition=transition)
         domain_action = await self._actions.domain_action(
             merchant_id=merchant_id,
@@ -184,7 +249,7 @@ class ActionExecutionService:
         action: RecoveryActionRow,
         case: RecoveryCase,
         evaluated_at: datetime,
-    ) -> PolicyDecision:
+    ) -> FinalPolicyCheck:
         receipt = await self._recovery.get_decision_receipt(
             merchant_id=action.merchant_id,
             receipt_id=action.decision_receipt_id,
@@ -231,11 +296,26 @@ class ActionExecutionService:
         incidents = await self._recovery.active_incidents(
             merchant_id=action.merchant_id,
             evaluated_at=evaluated_at,
+            case_id=case.case_id,
+            diagnosis_code=case.diagnosis,
         )
         facts = await self._recovery.authoritative_facts_for_case(
             merchant_id=action.merchant_id,
             case=case,
         )
+        aggregate_contact_count = case.contact_count
+        customer_contact_in_progress = False
+        if case.customer_id is not None:
+            contact_snapshot = await self._recovery.customer_contact_snapshot(
+                merchant_id=action.merchant_id,
+                customer_id=case.customer_id,
+                for_update=True,
+            )
+            aggregate_contact_count = contact_snapshot.aggregate_contact_count
+            customer_contact_in_progress = (
+                contact_snapshot.active_intervention_action_id is not None
+                and contact_snapshot.active_intervention_action_id != action.id
+            )
         status = (facts.status or "").upper()
         approval = None
         if receipt.human_review_id is not None:
@@ -243,7 +323,7 @@ class ActionExecutionService:
                 merchant_id=action.merchant_id,
                 review_id=receipt.human_review_id,
             )
-        return evaluate_policy(
+        decision = evaluate_policy(
             policy,
             PolicyEvaluationInput(
                 case_id=case.case_id,
@@ -251,7 +331,7 @@ class ActionExecutionService:
                 currency=case.currency,
                 confidence_basis_points=round((case.diagnosis_confidence or 0) * 10_000),
                 retry_count=case.retry_count,
-                contact_count=case.contact_count,
+                contact_count=aggregate_contact_count,
                 evaluated_at=evaluated_at,
                 candidates=(candidate, no_action),
                 evidence_references=tuple(receipt.evidence_references),
@@ -262,9 +342,53 @@ class ActionExecutionService:
                 disputed=status == "DISPUTED",
                 cancelled=status in {"CANCELLED", "ESCALATED"},
                 approval=approval,
+                customer_contact_in_progress=customer_contact_in_progress,
+                customer_identity_resolved=case.customer_id is not None,
                 active_promise_to_pay=facts.promise_due_at is not None,
                 promise_due_at=facts.promise_due_at,
             ),
+        )
+        return FinalPolicyCheck(
+            decision=decision,
+            policy=policy,
+            evidence_references=tuple(receipt.evidence_references),
+        )
+
+    @staticmethod
+    def _build_pre_execution_review(
+        *,
+        action: RecoveryActionRow,
+        case: RecoveryCase,
+        policy_check: FinalPolicyCheck,
+        requested_at: datetime,
+    ) -> HumanReviewRequest:
+        candidate = policy_check.decision.selected_action
+        fingerprint = ActionFingerprintInput(
+            case_id=case.case_id,
+            action_type=candidate.action_type.value,
+            target=candidate.target,
+            amount_minor=case.revenue_at_risk_minor,
+            currency=case.currency,
+            logical_attempt=candidate.logical_attempt,
+            policy_digest=policy_check.policy.content_digest,
+        ).digest()
+        material = ":".join(
+            (action.merchant_id, action.id, policy_check.policy.version, fingerprint)
+        )
+        return HumanReviewRequest(
+            review_id=f"review_{sha256(material.encode()).hexdigest()[:32]}",
+            merchant_id=action.merchant_id,
+            case_id=case.case_id,
+            action_fingerprint=fingerprint,
+            proposed_action_type=candidate.action_type.value,
+            evidence_references=policy_check.evidence_references,
+            policy_version=policy_check.policy.version,
+            policy_digest=policy_check.policy.content_digest,
+            reason_code=policy_check.decision.reason_codes[-1],
+            risk_detail="Current policy requires a fresh approval before provider execution",
+            requested_at=requested_at,
+            expires_at=requested_at + timedelta(hours=24),
+            status=ReviewStatus.REQUESTED,
         )
 
     async def record_execution_result(
@@ -426,10 +550,43 @@ class ActionExecutionService:
             return ExecutionDisposition(
                 action.id, ActionStatus(action.status), case.state, "STALE_LOOKUP"
             )
+        unresolved_at_deadline = (
+            action.reconciliation_deadline is not None
+            and result.observed_at >= action.reconciliation_deadline
+            and not (
+                result.is_authoritative
+                and result.status in {ActionStatus.SUCCEEDED, ActionStatus.FAILED}
+            )
+        )
+        if case.state is CaseState.VERIFYING and unresolved_at_deadline:
+            await self._actions.mark_verification_expired_unknown(
+                action=action,
+                observed_at=result.observed_at,
+            )
+            case = await self._transition(
+                case=case,
+                action=action,
+                to_state=CaseState.UNKNOWN,
+                reason_code="VERIFICATION_DEADLINE_EXCEEDED",
+                occurred_at=result.observed_at,
+            )
+            await self._store_observation(
+                action=action,
+                status=ActionStatus.UNKNOWN,
+                source=result.evidence_source,
+                observed_at=result.observed_at,
+                evidence_reference=result.evidence_reference,
+                reason_code="VERIFICATION_DEADLINE_EXCEEDED",
+                authoritative=False,
+            )
         if (
             case.state is CaseState.UNKNOWN
             and action.reconciliation_deadline is not None
             and result.observed_at >= action.reconciliation_deadline
+            and not (
+                result.is_authoritative
+                and result.status in {ActionStatus.SUCCEEDED, ActionStatus.FAILED}
+            )
         ):
             action.dead_lettered_at = result.observed_at
             action.updated_at = result.observed_at
@@ -516,6 +673,7 @@ class ActionExecutionService:
             action = await self._actions.find_action_for_provider_object(
                 merchant_id=event.merchant_id,
                 provider_object_id=provider_object_id,
+                action_types=_RECOVERY_CREDIT_ACTIONS,
                 for_update=True,
             )
         else:
@@ -524,6 +682,7 @@ class ActionExecutionService:
                 await self._actions.find_latest_action_for_target(
                     merchant_id=event.merchant_id,
                     target_id=subject_id,
+                    action_types=_RECOVERY_CREDIT_ACTIONS,
                     for_update=True,
                 )
                 if subject_id is not None
@@ -622,6 +781,8 @@ class ActionExecutionService:
         occurred_at: datetime,
         authoritative_evidence_reference: str | None = None,
         terminal_reason: str | None = None,
+        next_evaluation_at: datetime | None = None,
+        policy_version: str | None = None,
     ) -> RecoveryCase:
         updated, transition = transition_case(
             case,
@@ -630,10 +791,11 @@ class ActionExecutionService:
             actor="OUTCOME_VERIFIER" if authoritative_evidence_reference else "ACTION_EXECUTOR",
             reason_code=reason_code,
             correlation_id=action.correlation_id,
-            policy_version=action.policy_version,
+            policy_version=policy_version or action.policy_version,
             occurred_at=occurred_at,
             authoritative_evidence_reference=authoritative_evidence_reference,
             terminal_reason=terminal_reason,
+            next_evaluation_at=next_evaluation_at,
         )
         await self._recovery.apply_transition(updated_case=updated, transition=transition)
         return updated

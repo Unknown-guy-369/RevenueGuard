@@ -1,0 +1,38 @@
+{
+  "diagram_type": "architecture",
+  "output": "/Users/abishekpriyanm/projects/RevenueGuard/docs/diagrams/revenueguard-architecture.html",
+  "specification": {
+    "path": "revenueguard.architecture.json",
+    "sha256": "34b598184e088b683d360a54d40d39f6561e75195b37b96949fb0cbb1324fc85",
+    "bytes": 7316
+  },
+  "artifact": {
+    "sha256": "dc46707f849ef8f33bbf3a9792926895ac2c20814f6df750c8d14ff7a00741c3",
+    "bytes": 724094
+  },
+  "validation": {
+    "profile": "showcase",
+    "checks_passed": 9,
+    "check_count": 9,
+    "errors": 0,
+    "warnings": 0
+  },
+  "browser_evidence": "passed",
+  "browser_evidence_receipt": "revenueguard-architecture.visual-check.json",
+  "desktop_viewports": [
+    [1440, 900],
+    [1600, 1000],
+    [1920, 1080],
+    [2048, 1320]
+  ],
+  "visual_review": "passed",
+  "visual_review_scope": "Image review of delivered-HTML screenshots at 2048x1320 light and 1440x900 dark; checked route clarity, label fit, theme contrast and vertical balance. Export interactions were not exercised.",
+  "correction_rounds": 0,
+  "correction_rounds_scope": "Post-delivery perceptual corrections; candidate validation repairs occurred before delivery.",
+  "repository_snapshot": {
+    "head": "3c66da2103ec38d98b1092432c2a903b03f4d175",
+    "working_tree_changes_included": true,
+    "inspected_on": "2026-09-05",
+    "evidence_notes": "README.md"
+  }
+}

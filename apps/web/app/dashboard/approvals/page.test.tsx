@@ -27,7 +27,7 @@ const reviewList = {
       policy_version: "policy_001",
       classification: "TEST" as const,
       requested_at: "2026-08-29T06:00:00Z",
-      expires_at: "2026-08-30T06:00:00Z",
+      expires_at: "2099-08-30T06:00:00Z",
     },
   ],
   total: 1,
@@ -63,5 +63,29 @@ describe("approvals page", () => {
       rationale: "The verified evidence supports a bounded retry.",
     });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("marks an expired review as expired and prevents an approval decision", async () => {
+    const expiredReviewList = {
+      ...reviewList,
+      reviews: [
+        {
+          ...reviewList.reviews[0],
+          expires_at: "2026-08-30T06:00:00Z",
+        },
+      ],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(expiredReviewList));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ApprovalsPage />);
+
+    await screen.findByText("EXPIRED");
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

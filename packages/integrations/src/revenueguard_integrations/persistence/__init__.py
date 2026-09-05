@@ -18,6 +18,7 @@ from revenueguard_integrations.persistence.models import (
     CaseTransition,
     CommunicationConsent,
     Customer,
+    CustomerIntervention,
     CustomerResponse,
     DecisionReceipt,
     EventCorrelation,
@@ -49,6 +50,7 @@ from revenueguard_integrations.persistence.playbook_repositories import (
 )
 from revenueguard_integrations.persistence.recovery_repositories import (
     AuthoritativeFacts,
+    CustomerContactSnapshot,
     EvidenceDisposition,
     EvidenceLinkResult,
     EvidenceOrder,
@@ -75,6 +77,8 @@ __all__ = [
     "ClaimedAction",
     "CommunicationConsent",
     "Customer",
+    "CustomerContactSnapshot",
+    "CustomerIntervention",
     "CustomerResponse",
     "DecisionReceipt",
     "DispatchFailureResult",

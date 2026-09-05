@@ -202,6 +202,49 @@ def test_transparent_degradation_baseline_detects_only_the_spiking_dimension() -
     assert by_issuer["BANK_B"].degraded is False
 
 
+def test_successes_without_failure_family_remain_in_incident_rate_denominator() -> None:
+    observations = []
+    for index in range(20):
+        failed = index < 2
+        observations.append(
+            PaymentOutcomeObservation(
+                observation_id=f"baseline-real-{index}",
+                merchant_id="merchant_001",
+                payment_id=f"baseline-payment-{index}",
+                succeeded=not failed,
+                payment_method="UPI",
+                issuer_family="BANK_A",
+                error_family="ISSUER_UNAVAILABLE" if failed else "NONE",
+                occurred_at=NOW - timedelta(hours=1, minutes=index),
+            )
+        )
+    for index in range(10):
+        failed = index < 8
+        observations.append(
+            PaymentOutcomeObservation(
+                observation_id=f"current-real-{index}",
+                merchant_id="merchant_001",
+                payment_id=f"current-payment-{index}",
+                succeeded=not failed,
+                payment_method="UPI",
+                issuer_family="BANK_A",
+                error_family="ISSUER_UNAVAILABLE" if failed else "NONE",
+                occurred_at=NOW - timedelta(minutes=index),
+            )
+        )
+
+    assessment = assess_payment_degradation(
+        tuple(observations),
+        evaluated_at=NOW,
+        policy=DegradationPolicy(),
+    )[0]
+
+    assert assessment.error_family == "ISSUER_UNAVAILABLE"
+    assert assessment.baseline_total == 20
+    assert assessment.current_total == 10
+    assert assessment.degraded is True
+
+
 def test_active_promise_defers_previously_authorized_customer_contact() -> None:
     decision = evaluate_policy(
         conservative_default_policy(),

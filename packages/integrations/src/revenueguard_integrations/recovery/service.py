@@ -16,16 +16,23 @@ from revenueguard_agents import (
     EvidenceItem,
 )
 from revenueguard_domain import (
+    ACTION_CLASSES,
+    ActionClass,
+    ActionEconomics,
     ActionFingerprintInput,
     ActionStatus,
     ActionType,
     CandidateAction,
     CaseState,
+    CustomerIntervention,
+    CustomerInterventionStatus,
     DecisionReceipt,
     Diagnosis,
     EventSource,
     HumanReviewDecision,
     HumanReviewRequest,
+    IncidentScope,
+    LogisticScoringArtifact,
     MerchantPolicySnapshot,
     NormalizedFailureCategory,
     PolicyDecision,
@@ -33,15 +40,20 @@ from revenueguard_domain import (
     PolicyResult,
     RecoveryAction,
     RecoveryCase,
+    RecoveryScoringContext,
+    RecoveryScoringResult,
     RevenueRiskEvent,
     ReviewDecisionType,
     ReviewStatus,
     VersionBundle,
     action_idempotency_key,
+    default_action_economics,
     diagnose_event,
     evaluate_policy,
     expire_review,
+    rank_candidates_by_expected_net_recovery,
     select_case_identity,
+    synthetic_default_scoring_artifact,
     transition_case,
 )
 from revenueguard_domain import (
@@ -56,7 +68,7 @@ from revenueguard_integrations.persistence import (
     order_evidence,
 )
 
-APPLICATION_VERSION: Final = "0.1.0-phase5"
+APPLICATION_VERSION: Final = "0.1.0-phase7"
 _PAID_STATUSES: Final = frozenset({"CAPTURED", "CHARGED", "COMPLETED", "PAID"})
 _CANCELLED_STATUSES: Final = frozenset({"CANCELLED", "ESCALATED"})
 
@@ -89,6 +101,8 @@ class RecoveryApplicationService:
         id_generator: IdGenerator | None = None,
         application_version: str = APPLICATION_VERSION,
         review_ttl: timedelta = timedelta(hours=24),
+        scoring_artifact: LogisticScoringArtifact | None = None,
+        action_economics: ActionEconomics | None = None,
     ) -> None:
         if not application_version:
             raise ValueError("application_version is required")
@@ -105,6 +119,8 @@ class RecoveryApplicationService:
         self._case_intelligence = case_intelligence or BoundedCaseIntelligence()
         self._application_version = application_version
         self._review_ttl = review_ttl
+        self._scoring_artifact = scoring_artifact or synthetic_default_scoring_artifact()
+        self._action_economics = action_economics or default_action_economics()
 
     async def process_event(
         self, *, merchant_id: str, normalized_event_id: str
@@ -545,7 +561,72 @@ class RecoveryApplicationService:
         incidents = await self._repository.active_incidents(
             merchant_id=case.merchant_id,
             evaluated_at=evaluated_at,
+            case_id=checking.case_id,
+            diagnosis_code=advisory_diagnosis.code,
         )
+        linked_systemic_incident = next(
+            (
+                incident
+                for incident in incidents
+                if incident.scope
+                in {
+                    IncidentScope.PAYMENT_RAIL,
+                    IncidentScope.GATEWAY,
+                    IncidentScope.ISSUER,
+                }
+            ),
+            None,
+        )
+        if linked_systemic_incident is not None:
+            checking = replace(
+                checking,
+                active_incident_id=linked_systemic_incident.incident_id,
+            )
+        aggregate_contact_count = case.contact_count
+        active_case_ids: tuple[str, ...] = (case.case_id,)
+        active_intervention_id = None
+        if case.customer_id is not None:
+            contact_snapshot = await self._repository.customer_contact_snapshot(
+                merchant_id=case.merchant_id,
+                customer_id=case.customer_id,
+                for_update=True,
+            )
+            aggregate_contact_count = contact_snapshot.aggregate_contact_count
+            active_case_ids = contact_snapshot.active_case_ids or (case.case_id,)
+            active_intervention_id = contact_snapshot.active_intervention_id
+            if active_intervention_id is not None:
+                await self._repository.coordinate_case_with_active_intervention(
+                    merchant_id=case.merchant_id,
+                    customer_id=case.customer_id,
+                    case_id=case.case_id,
+                    updated_at=evaluated_at,
+                )
+        try:
+            scoring = rank_candidates_by_expected_net_recovery(
+                advisory_diagnosis.candidates,
+                context=RecoveryScoringContext(
+                    amount_minor=case.revenue_at_risk_minor,
+                    retry_count=case.retry_count,
+                    aggregate_contact_count=aggregate_contact_count,
+                    diagnosis_confidence_basis_points=(advisory_diagnosis.confidence_basis_points),
+                    failure_category=event_row.normalized_failure_category,
+                    active_systemic_incident=bool(incidents),
+                    evaluated_at=evaluated_at,
+                ),
+                artifact=self._scoring_artifact,
+                economics=self._action_economics,
+                allowed_actions=policy.allowed_actions,
+            )
+        except ArithmeticError, ValueError:
+            scoring = RecoveryScoringResult(
+                candidates=advisory_diagnosis.candidates,
+                model_version=self._scoring_artifact.model_version,
+                feature_version=self._scoring_artifact.feature_version,
+                economics_version=self._action_economics.version,
+                artifact_classification=self._scoring_artifact.classification,
+                fallback_reason="SCORING_INFERENCE_FAILED",
+            )
+        ranked_diagnosis = replace(advisory_diagnosis, candidates=scoring.candidates)
         facts = await self._repository.authoritative_facts_for_case(
             merchant_id=case.merchant_id,
             case=checking,
@@ -557,9 +638,9 @@ class RecoveryApplicationService:
             currency=case.currency,
             confidence_basis_points=advisory_diagnosis.confidence_basis_points,
             retry_count=case.retry_count,
-            contact_count=case.contact_count,
+            contact_count=aggregate_contact_count,
             evaluated_at=evaluated_at,
-            candidates=advisory_diagnosis.candidates,
+            candidates=ranked_diagnosis.candidates,
             evidence_references=(event_row.id,),
             consent_by_channel=consent,
             opted_out_channels=opted_out,
@@ -567,12 +648,14 @@ class RecoveryApplicationService:
             already_paid=status in _PAID_STATUSES,
             disputed=(status == "DISPUTED" or diagnosis.code == "PAYMENT_DISPUTED"),
             cancelled=status in _CANCELLED_STATUSES,
-            diagnosis_defer_until=advisory_diagnosis.defer_until,
+            diagnosis_defer_until=ranked_diagnosis.defer_until,
             approval=approval,
             unknown_equivalent_action=await self._has_unknown_equivalent(
                 case=checking,
-                candidates=advisory_diagnosis.candidates,
+                candidates=ranked_diagnosis.candidates,
             ),
+            customer_contact_in_progress=active_intervention_id is not None,
+            customer_identity_resolved=case.customer_id is not None,
             active_promise_to_pay=facts.promise_due_at is not None,
             promise_due_at=facts.promise_due_at,
         )
@@ -613,6 +696,7 @@ class RecoveryApplicationService:
             decision=decision,
             receipt_id=receipt_id,
             authorized_at=evaluated_at,
+            coordinated_case_ids=active_case_ids,
         )
         receipt = DecisionReceipt(
             receipt_id=receipt_id,
@@ -620,7 +704,7 @@ class RecoveryApplicationService:
             merchant_id=case.merchant_id,
             correlation_id=event_row.correlation_id,
             evidence_references=evaluation.evidence_references,
-            candidate_actions=advisory_diagnosis.candidates,
+            candidate_actions=ranked_diagnosis.candidates,
             selected_action_type=decision.selected_action.action_type,
             explanation=(
                 intelligence.explanation + " Policy evaluation: " + ",".join(decision.reason_codes)
@@ -641,6 +725,11 @@ class RecoveryApplicationService:
             model_prediction_ids=tuple(
                 prediction.prediction_id for prediction in intelligence.predictions
             ),
+            scoring_model_version=scoring.model_version,
+            scoring_feature_version=scoring.feature_version,
+            scoring_economics_version=scoring.economics_version,
+            scoring_artifact_classification=scoring.artifact_classification.value,
+            scoring_fallback_reason=scoring.fallback_reason,
         )
         await self._repository.store_model_predictions(intelligence.predictions)
         await self._repository.store_receipt(receipt)
@@ -654,6 +743,33 @@ class RecoveryApplicationService:
                 max_attempts=3,
                 reconciliation_deadline=evaluated_at + timedelta(hours=1),
             )
+            if (
+                ACTION_CLASSES[action.action_type] is ActionClass.CUSTOMER_CONTACT
+                and case.customer_id is not None
+            ):
+                intervention_material = ":".join(
+                    (case.merchant_id, case.customer_id, action.action_id)
+                )
+                await self._repository.store_customer_intervention(
+                    CustomerIntervention(
+                        intervention_id=(
+                            "intervention_"
+                            + sha256(intervention_material.encode()).hexdigest()[:32]
+                        ),
+                        merchant_id=case.merchant_id,
+                        customer_id=case.customer_id,
+                        owner_case_id=case.case_id,
+                        action_id=action.action_id,
+                        coordinated_case_ids=active_case_ids,
+                        status=CustomerInterventionStatus.ACTIVE,
+                        cooldown_until=evaluated_at
+                        + timedelta(seconds=policy.default_defer_seconds),
+                        model_version=scoring.model_version,
+                        policy_version=policy.version,
+                        created_at=evaluated_at,
+                        updated_at=evaluated_at,
+                    )
+                )
         return RecoveryServiceResult(
             normalized_event_id=event_row.id,
             case_id=decided_case.case_id,
@@ -740,6 +856,7 @@ class RecoveryApplicationService:
         decision: PolicyDecision,
         receipt_id: str,
         authorized_at: datetime,
+        coordinated_case_ids: tuple[str, ...],
     ) -> RecoveryAction | None:
         if (
             decision.result is not PolicyResult.PROCEED
@@ -763,6 +880,7 @@ class RecoveryApplicationService:
         }
         if candidate.channel is not None:
             parameters["channel"] = f"SIMULATED_{candidate.channel.value}"
+            parameters["coordinated_case_ids"] = list(coordinated_case_ids)
         return RecoveryAction(
             action_id=f"action_{key.rsplit(':', maxsplit=1)[-1][:32]}",
             case_id=case.case_id,

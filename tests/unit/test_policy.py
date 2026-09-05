@@ -248,6 +248,23 @@ def test_contact_requires_consent_and_honors_opt_out(
     assert decision.reason_codes[0] == reason
 
 
+def test_contact_requires_canonical_customer_identity() -> None:
+    reminder = candidate(ActionType.SEND_REMINDER, channel=ContactChannel.EMAIL)
+
+    decision = evaluate_policy(
+        make_policy(),
+        make_evaluation(
+            reminder,
+            no_action(),
+            consent_by_channel=((ContactChannel.EMAIL, ConsentState.GRANTED),),
+            customer_identity_resolved=False,
+        ),
+    )
+
+    assert decision.result is PolicyResult.SKIP
+    assert decision.reason_codes[0] == "CUSTOMER_IDENTITY_UNRESOLVED"
+
+
 @pytest.mark.parametrize(
     ("scope", "action_type", "channel", "applies"),
     [
@@ -525,4 +542,7 @@ def test_candidate_receipt_shape_preserves_action_identity() -> None:
         "target": "customer_001",
         "logical_attempt": 1,
         "channel": "EMAIL",
+        "action_cost_minor": 0,
+        "risk_penalty_minor": 0,
+        "customer_friction_penalty_minor": 0,
     }

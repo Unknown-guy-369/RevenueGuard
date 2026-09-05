@@ -13,7 +13,10 @@ from revenueguard_integrations.persistence import (
     create_session_factory,
     session_scope,
 )
-from revenueguard_integrations.playbooks import ReceivablesPlaybookService
+from revenueguard_integrations.playbooks import (
+    PaymentDegradationService,
+    ReceivablesPlaybookService,
+)
 
 from revenueguard_worker.celery_app import celery_app
 from revenueguard_worker.config import get_worker_settings
@@ -31,9 +34,21 @@ class PromiseMaintenanceTaskResult(TypedDict):
     broken_promises_escalated: int
 
 
+class PortfolioMaintenanceTaskResult(TypedDict):
+    merchants_evaluated: int
+    assessments_applied: int
+    incidents_resolved: int
+    interventions_closed: int
+
+
 @celery_app.task(name="revenueguard.playbooks.maintain_promises")  # type: ignore[untyped-decorator]
 def maintain_promises() -> PromiseMaintenanceTaskResult:
     return asyncio.run(_maintain_promises())
+
+
+@celery_app.task(name="revenueguard.portfolio.maintain")  # type: ignore[untyped-decorator]
+def maintain_portfolio() -> PortfolioMaintenanceTaskResult:
+    return asyncio.run(_maintain_portfolio())
 
 
 async def _maintain_promises() -> PromiseMaintenanceTaskResult:
@@ -60,4 +75,24 @@ async def _maintain_promises() -> PromiseMaintenanceTaskResult:
         "broken_promises_escalated": sum(
             item.disposition == "BROKEN_PROMISE_ESCALATED" for item in broken
         ),
+    }
+
+
+async def _maintain_portfolio() -> PortfolioMaintenanceTaskResult:
+    now = datetime.now(UTC)
+    async with session_scope(session_factory) as session:
+        recovery_repository = RecoveryRepository(session)
+        result = await PaymentDegradationService(PlaybookRepository(session)).maintain_portfolios(
+            evaluated_at=now,
+            merchant_limit=settings.portfolio_maintenance_merchant_batch_size,
+        )
+        interventions_closed = await recovery_repository.close_expired_customer_interventions(
+            due_at=now,
+            limit=settings.customer_intervention_maintenance_batch_size,
+        )
+    return {
+        "merchants_evaluated": result.merchants_evaluated,
+        "assessments_applied": result.assessments_applied,
+        "incidents_resolved": result.incidents_resolved,
+        "interventions_closed": interventions_closed,
     }

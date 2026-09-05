@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from typing import Literal, TypedDict, cast
 
 from revenueguard_agents import (
@@ -14,7 +15,13 @@ from revenueguard_agents import (
     LangSmithTracingConfig,
     OpenAICompatibleStructuredModel,
 )
-from revenueguard_domain import ActionType, EventSource, RecoveryAction
+from revenueguard_domain import (
+    ActionType,
+    EventSource,
+    PaymentOutcomeObservation,
+    RecoveryAction,
+    RevenueRiskEvent,
+)
 from revenueguard_integrations.execution import (
     ActionExecutionService,
     ActionProvider,
@@ -26,11 +33,13 @@ from revenueguard_integrations.persistence import (
     ActionRepository,
     EventDispatch,
     EventIngestionRepository,
+    PlaybookRepository,
     RecoveryRepository,
     create_database_engine,
     create_session_factory,
     session_scope,
 )
+from revenueguard_integrations.playbooks import PaymentDegradationService
 from revenueguard_integrations.razorpay import (
     RazorpayEventError,
     normalize_razorpay_event,
@@ -123,6 +132,10 @@ class ReconciliationResult(TypedDict):
     reconciled: int
 
 
+class DeferredCaseReevaluationResult(TypedDict):
+    reevaluated: int
+
+
 @celery_app.task(name="revenueguard.system.ping")  # type: ignore[untyped-decorator]
 def ping() -> PingResult:
     """Prove worker registration without touching financial state."""
@@ -189,6 +202,13 @@ def execute_recovery_action(
 @celery_app.task(name="revenueguard.actions.reconcile_unknown")  # type: ignore[untyped-decorator]
 def reconcile_unknown_actions() -> ReconciliationResult:
     return asyncio.run(_reconcile_unknown_actions())
+
+
+@celery_app.task(name="revenueguard.cases.reevaluate_deferred")  # type: ignore[untyped-decorator]
+def reevaluate_deferred_cases() -> DeferredCaseReevaluationResult:
+    """Re-run policy and decisioning for cases whose durable wake-up is due."""
+
+    return asyncio.run(_reevaluate_deferred_cases())
 
 
 async def _dispatch_pending_events() -> DispatchResult:
@@ -283,6 +303,13 @@ async def _process_webhook_event(
             webhook_event_id=webhook_event_id,
             correlations=_event_correlations(event.to_dict()),
         )
+        observation = payment_outcome_observation(event, document)
+        if observation is not None:
+            await PaymentDegradationService(PlaybookRepository(session)).observe_and_evaluate(
+                observation,
+                source_event_id=event.source_event_id,
+                evaluated_at=event.received_at,
+            )
         action_repository = ActionRepository(session)
         await RecoveryApplicationService(
             RecoveryRepository(session),
@@ -419,6 +446,19 @@ async def _reconcile_unknown_actions() -> ReconciliationResult:
     return {"stale_calls_marked_unknown": len(stale), "reconciled": reconciled}
 
 
+async def _reevaluate_deferred_cases() -> DeferredCaseReevaluationResult:
+    async with session_scope(session_factory) as session:
+        results = await RecoveryApplicationService(
+            RecoveryRepository(session),
+            action_repository=ActionRepository(session),
+            case_intelligence=case_intelligence,
+        ).reevaluate_deferred(
+            due_at=datetime.now(UTC),
+            limit=settings.deferred_case_reevaluation_batch_size,
+        )
+    return {"reevaluated": len(results)}
+
+
 def _provider_for(action: RecoveryAction) -> ActionProvider:
     if (
         settings.action_provider == "RAZORPAY_TEST"
@@ -432,6 +472,43 @@ def _provider_for(action: RecoveryAction) -> ActionProvider:
             timeout_seconds=settings.razorpay_timeout_seconds,
         )
     return DeterministicSimulatorAdapter()
+
+
+def payment_outcome_observation(
+    event: RevenueRiskEvent,
+    document: Mapping[str, object],
+) -> PaymentOutcomeObservation | None:
+    if event.payment_id is None or event.event_type not in {
+        "payment.authorized",
+        "payment.captured",
+        "payment.failed",
+    }:
+        return None
+    payment = _provider_entity(document, "payment")
+    payment_method = _bounded_dimension(payment, "method")
+    issuer_family = next(
+        (
+            value
+            for key in ("bank", "issuer", "wallet")
+            if (value := _bounded_dimension(payment, key)) != "UNKNOWN"
+        ),
+        "UNKNOWN",
+    )
+    material = ":".join((event.merchant_id, event.source_event_id, event.payment_id))
+    return PaymentOutcomeObservation(
+        observation_id=f"observation_{sha256(material.encode()).hexdigest()[:32]}",
+        merchant_id=event.merchant_id,
+        payment_id=event.payment_id,
+        succeeded=event.event_type in {"payment.authorized", "payment.captured"},
+        payment_method=payment_method,
+        issuer_family=issuer_family,
+        error_family=(
+            "NONE"
+            if event.event_type != "payment.failed"
+            else event.normalized_failure_category.value
+        ),
+        occurred_at=event.occurred_at,
+    )
 
 
 async def _record_processing_failure(
@@ -547,6 +624,15 @@ def _provider_entity(
         return None
     entity = wrapper.get("entity")
     return cast(Mapping[str, object], entity) if isinstance(entity, dict) else None
+
+
+def _bounded_dimension(entity: Mapping[str, object] | None, key: str) -> str:
+    if entity is None:
+        return "UNKNOWN"
+    value = entity.get(key)
+    if not isinstance(value, str) or not value:
+        return "UNKNOWN"
+    return value.upper()[:128]
 
 
 def _entity_status(entity: Mapping[str, object] | None, event_type: str) -> str:

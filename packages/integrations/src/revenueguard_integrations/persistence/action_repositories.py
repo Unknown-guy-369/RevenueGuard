@@ -365,6 +365,25 @@ class ActionRepository:
         await self._session.flush()
         return attempt
 
+    async def mark_verification_expired_unknown(
+        self,
+        *,
+        action: RecoveryAction,
+        observed_at: datetime,
+    ) -> None:
+        if action.status != ActionStatus.SUCCEEDED.value:
+            raise ActionPersistenceError(
+                "ACTION_NOT_VERIFYING",
+                "only an accepted action awaiting verification can expire to unknown",
+            )
+        action.status = ActionStatus.UNKNOWN.value
+        action.unknown_since = observed_at
+        action.lease_token = None
+        action.lease_expires_at = None
+        action.last_error_code = "VERIFICATION_DEADLINE_EXCEEDED"
+        action.updated_at = observed_at
+        await self._session.flush()
+
     async def store_outcome(self, outcome: DomainVerifiedOutcome) -> VerifiedOutcome:
         existing = await self._session.get(
             VerifiedOutcome, (outcome.merchant_id, outcome.outcome_id)
@@ -394,11 +413,19 @@ class ActionRepository:
         return row
 
     async def find_action_for_provider_object(
-        self, *, merchant_id: str, provider_object_id: str, for_update: bool = False
+        self,
+        *,
+        merchant_id: str,
+        provider_object_id: str,
+        action_types: tuple[ActionType, ...],
+        for_update: bool = False,
     ) -> RecoveryAction | None:
+        if not action_types:
+            raise ValueError("action_types cannot be empty")
         statement = select(RecoveryAction).where(
             RecoveryAction.merchant_id == merchant_id,
             RecoveryAction.provider_object_id == provider_object_id,
+            RecoveryAction.action_type.in_(tuple(item.value for item in action_types)),
             RecoveryAction.status.in_((ActionStatus.SUCCEEDED.value, ActionStatus.UNKNOWN.value)),
         )
         if for_update:
@@ -406,13 +433,21 @@ class ActionRepository:
         return (await self._session.scalars(statement)).one_or_none()
 
     async def find_latest_action_for_target(
-        self, *, merchant_id: str, target_id: str, for_update: bool = False
+        self,
+        *,
+        merchant_id: str,
+        target_id: str,
+        action_types: tuple[ActionType, ...],
+        for_update: bool = False,
     ) -> RecoveryAction | None:
+        if not action_types:
+            raise ValueError("action_types cannot be empty")
         statement = (
             select(RecoveryAction)
             .where(
                 RecoveryAction.merchant_id == merchant_id,
                 RecoveryAction.target_id == target_id,
+                RecoveryAction.action_type.in_(tuple(item.value for item in action_types)),
                 RecoveryAction.status.in_(
                     (ActionStatus.SUCCEEDED.value, ActionStatus.UNKNOWN.value)
                 ),
@@ -469,9 +504,10 @@ class ActionRepository:
         cancelled_at: datetime,
         reason_code: str,
     ) -> None:
-        if action.attempt_count != 0:
+        if action.status != ActionStatus.PENDING.value:
             raise ActionPersistenceError(
-                "ACTION_ALREADY_ATTEMPTED", "attempted action cannot be pre-execution cancelled"
+                "ACTION_NOT_PENDING",
+                "only a pending action can be cancelled before a provider attempt",
             )
         action.status = ActionStatus.FAILED.value
         action.last_error_code = reason_code

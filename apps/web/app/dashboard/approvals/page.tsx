@@ -7,12 +7,19 @@ import { Check, ExternalLink, X } from "lucide-react";
 import { formatMoney, formatMoment, humanize } from "@/components/dashboard-ui";
 import { fetchJson, type ReviewList } from "@/lib/api/merchant-contracts";
 
+function isExpired(expiresAt: string, now: number): boolean {
+  const expiry = Date.parse(expiresAt);
+  return Number.isFinite(expiry) && expiry <= now;
+}
+
 export default function ApprovalsPage() {
   const [data, setData] = useState<ReviewList | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyReview, setBusyReview] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [pendingDecision, setPendingDecision] = useState<{
     reviewId: string;
+    expiresAt: string;
     decision: "APPROVE" | "REJECT";
   } | null>(null);
   const [rationale, setRationale] = useState("");
@@ -32,14 +39,37 @@ export default function ApprovalsPage() {
     };
   }, []);
 
-  function openDecision(reviewId: string, decision: "APPROVE" | "REJECT") {
+  useEffect(() => {
+    const nextExpiry = data?.reviews
+      .map((review) => Date.parse(review.expires_at))
+      .filter((expiry) => Number.isFinite(expiry) && expiry > currentTime)
+      .reduce<number | null>((earliest, expiry) => {
+        if (earliest === null || expiry < earliest) return expiry;
+        return earliest;
+      }, null);
+    if (nextExpiry === null || nextExpiry === undefined) return;
+
+    const timer = window.setTimeout(
+      () => setCurrentTime(Date.now()),
+      Math.min(nextExpiry - currentTime, 2_147_483_647),
+    );
+    return () => window.clearTimeout(timer);
+  }, [currentTime, data]);
+
+  function openDecision(reviewId: string, expiresAt: string, decision: "APPROVE" | "REJECT") {
+    if (isExpired(expiresAt, currentTime)) return;
     setRationale("");
     setError(null);
-    setPendingDecision({ reviewId, decision });
+    setPendingDecision({ reviewId, expiresAt, decision });
   }
 
   async function submitDecision() {
     if (pendingDecision === null || rationale.trim().length < 3) return;
+    if (isExpired(pendingDecision.expiresAt, currentTime)) {
+      setError("This review expired before the decision could be recorded.");
+      setPendingDecision(null);
+      return;
+    }
     setBusyReview(pendingDecision.reviewId);
     setError(null);
     try {
@@ -87,88 +117,97 @@ export default function ApprovalsPage() {
         </div>
       ) : null}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        {data?.reviews.map((review) => (
-          <article
-            className="flex flex-col justify-between rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
-            key={review.review_id}
-          >
-            <div>
-              <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
-                  <h2 className="font-mono text-sm font-medium text-gray-900">
-                    {review.customer_reference_masked ?? "Customer reference unavailable"}
-                  </h2>
-                  <p className="mt-1 font-mono text-sm text-gray-500">
-                    {formatMoney(review.amount_minor, review.currency)}
-                  </p>
-                </div>
-                <span className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tracking-wide text-amber-800">
-                  PENDING
-                </span>
-                {review.classification === "SYNTHETIC" ? (
-                  <span className="rounded bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900">
-                    SYNTHETIC
+        {data?.reviews.map((review) => {
+          const expired = isExpired(review.expires_at, currentTime);
+          return (
+            <article
+              className="flex flex-col justify-between rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
+              key={review.review_id}
+            >
+              <div>
+                <div className="mb-4 flex items-start justify-between gap-4">
+                  <div>
+                    <h2 className="font-mono text-sm font-medium text-gray-900">
+                      {review.customer_reference_masked ?? "Customer reference unavailable"}
+                    </h2>
+                    <p className="mt-1 font-mono text-sm text-gray-500">
+                      {formatMoney(review.amount_minor, review.currency)}
+                    </p>
+                  </div>
+                  <span
+                    className={
+                      expired
+                        ? "rounded border border-gray-300 bg-gray-100 px-2 py-1 text-xs font-semibold tracking-wide text-gray-700"
+                        : "rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold tracking-wide text-amber-800"
+                    }
+                  >
+                    {expired ? "EXPIRED" : "PENDING"}
                   </span>
-                ) : null}
+                  {review.classification === "SYNTHETIC" ? (
+                    <span className="rounded bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900">
+                      SYNTHETIC
+                    </span>
+                  ) : null}
+                </div>
+                <dl className="mb-6 grid grid-cols-[auto_1fr] gap-x-3 gap-y-3 text-sm">
+                  <dt className="font-medium text-gray-900">Proposed action</dt>
+                  <dd className="text-gray-600">{humanize(review.proposed_action_type)}</dd>
+                  <dt className="font-medium text-gray-900">Diagnosis</dt>
+                  <dd className="text-gray-600">
+                    {review.diagnosis ? humanize(review.diagnosis) : "Not available"}
+                  </dd>
+                  <dt className="font-medium text-gray-900">Confidence</dt>
+                  <dd className="text-gray-600">
+                    {review.confidence_basis_points === null
+                      ? "Not available"
+                      : `${(review.confidence_basis_points / 100).toFixed(1)}%`}
+                  </dd>
+                  <dt className="font-medium text-gray-900">Reason</dt>
+                  <dd className="text-gray-600">
+                    {humanize(review.reason_code)} · {review.risk_detail}
+                  </dd>
+                  <dt className="font-medium text-gray-900">Policy</dt>
+                  <dd>
+                    <code className="rounded bg-gray-100 px-1 text-gray-700">
+                      {review.policy_version}
+                    </code>
+                  </dd>
+                </dl>
+                <p className="mb-4 text-xs text-gray-500">
+                  Requested {formatMoment(review.requested_at)} · Expires{" "}
+                  {formatMoment(review.expires_at)}
+                </p>
               </div>
-              <dl className="mb-6 grid grid-cols-[auto_1fr] gap-x-3 gap-y-3 text-sm">
-                <dt className="font-medium text-gray-900">Proposed action</dt>
-                <dd className="text-gray-600">{humanize(review.proposed_action_type)}</dd>
-                <dt className="font-medium text-gray-900">Diagnosis</dt>
-                <dd className="text-gray-600">
-                  {review.diagnosis ? humanize(review.diagnosis) : "Not available"}
-                </dd>
-                <dt className="font-medium text-gray-900">Confidence</dt>
-                <dd className="text-gray-600">
-                  {review.confidence_basis_points === null
-                    ? "Not available"
-                    : `${(review.confidence_basis_points / 100).toFixed(1)}%`}
-                </dd>
-                <dt className="font-medium text-gray-900">Reason</dt>
-                <dd className="text-gray-600">
-                  {humanize(review.reason_code)} · {review.risk_detail}
-                </dd>
-                <dt className="font-medium text-gray-900">Policy</dt>
-                <dd>
-                  <code className="rounded bg-gray-100 px-1 text-gray-700">
-                    {review.policy_version}
-                  </code>
-                </dd>
-              </dl>
-              <p className="mb-4 text-xs text-gray-500">
-                Requested {formatMoment(review.requested_at)} · Expires{" "}
-                {formatMoment(review.expires_at)}
-              </p>
-            </div>
-            <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
-              <button
-                disabled={busyReview === review.review_id}
-                onClick={() => openDecision(review.review_id, "APPROVE")}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-ledger-navy px-4 py-2 font-medium text-white transition-colors hover:bg-ledger-navy/90 disabled:opacity-50"
-                type="button"
-              >
-                <Check className="h-4 w-4" />
-                Approve
-              </button>
-              <button
-                disabled={busyReview === review.review_id}
-                onClick={() => openDecision(review.review_id, "REJECT")}
-                className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-                type="button"
-              >
-                <X className="h-4 w-4" />
-                Reject
-              </button>
-              <Link
-                aria-label="Open full recovery case"
-                className="rounded-lg bg-gray-50 p-2 text-gray-500 transition-colors hover:bg-blue-50 hover:text-payment-blue"
-                href={`/dashboard/recovery/cases/${review.case_id}`}
-              >
-                <ExternalLink className="h-5 w-5" />
-              </Link>
-            </div>
-          </article>
-        ))}
+              <div className="flex items-center gap-3 border-t border-gray-100 pt-4">
+                <button
+                  disabled={expired || busyReview === review.review_id}
+                  onClick={() => openDecision(review.review_id, review.expires_at, "APPROVE")}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-ledger-navy px-4 py-2 font-medium text-white transition-colors hover:bg-ledger-navy/90 disabled:opacity-50"
+                  type="button"
+                >
+                  <Check className="h-4 w-4" />
+                  Approve
+                </button>
+                <button
+                  disabled={expired || busyReview === review.review_id}
+                  onClick={() => openDecision(review.review_id, review.expires_at, "REJECT")}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                  type="button"
+                >
+                  <X className="h-4 w-4" />
+                  Reject
+                </button>
+                <Link
+                  aria-label="Open full recovery case"
+                  className="rounded-lg bg-gray-50 p-2 text-gray-500 transition-colors hover:bg-blue-50 hover:text-payment-blue"
+                  href={`/dashboard/recovery/cases/${review.case_id}`}
+                >
+                  <ExternalLink className="h-5 w-5" />
+                </Link>
+              </div>
+            </article>
+          );
+        })}
         {data && !data.reviews.length ? (
           <div className="rounded-xl border border-gray-200 bg-white p-12 text-center shadow-sm xl:col-span-2">
             <Check className="mx-auto h-7 w-7 text-gray-400" />

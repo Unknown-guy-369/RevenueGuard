@@ -7,6 +7,7 @@ from revenueguard_integrations.playbooks.extraction import (
 from revenueguard_integrations.playbooks.service import (
     CustomerResponseResult,
     PaymentDegradationService,
+    PortfolioMaintenanceResult,
     PromiseMaintenanceResult,
     ReceivablesPlaybookService,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "BoundedPromiseExtractor",
     "CustomerResponseResult",
     "PaymentDegradationService",
+    "PortfolioMaintenanceResult",
     "PromiseExtractionProvider",
     "PromiseMaintenanceResult",
     "ReceivablesPlaybookService",

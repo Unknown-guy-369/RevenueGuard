@@ -46,6 +46,10 @@ def test_transition_map_contains_every_state_and_locks_terminal_states() -> None
     assert ALLOWED_TRANSITIONS[CaseState.STOPPED] == frozenset()
 
 
+def test_verification_without_authoritative_evidence_can_become_unknown() -> None:
+    assert can_transition(CaseState.VERIFYING, CaseState.UNKNOWN)
+
+
 @pytest.mark.parametrize(
     ("before", "after"),
     [

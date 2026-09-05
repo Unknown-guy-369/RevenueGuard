@@ -531,6 +531,12 @@ class RecoveryCase(TimestampColumns, Base):
             "merchant_id",
             "latest_evidence_occurred_at",
         ),
+        Index(
+            "ix_recovery_cases_customer_contact",
+            "merchant_id",
+            "customer_id",
+            "state",
+        ),
     )
 
 
@@ -617,7 +623,7 @@ class CaseTransition(Base):
             "(before_state = 'READY' AND after_state IN ('EXECUTING')) OR "
             "(before_state = 'EXECUTING' AND after_state IN ('VERIFYING', 'UNKNOWN')) OR "
             "(before_state = 'VERIFYING' AND after_state IN "
-            "('RECOVERED', 'DECISION_PENDING', 'STOPPED')) OR "
+            "('RECOVERED', 'DECISION_PENDING', 'STOPPED', 'UNKNOWN')) OR "
             "(before_state = 'UNKNOWN' AND after_state IN ('VERIFYING', 'ESCALATED')) OR "
             "(before_state = 'DEFERRED' AND after_state IN ('DECISION_PENDING')) OR "
             "(before_state = 'ESCALATED' AND after_state IN ('DECISION_PENDING', 'STOPPED'))",
@@ -764,6 +770,19 @@ class DecisionReceipt(Base):
     resulting_state: Mapped[str] = mapped_column(String(32), nullable=False)
     audit_entry_id: Mapped[str | None] = mapped_column(String(128))
     model_prediction_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    scoring_model_version: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="NOT_APPLICABLE"
+    )
+    scoring_feature_version: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="NOT_APPLICABLE"
+    )
+    scoring_economics_version: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="NOT_APPLICABLE"
+    )
+    scoring_artifact_classification: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="NOT_APPLICABLE"
+    )
+    scoring_fallback_reason: Mapped[str | None] = mapped_column(String(128))
     schema_version: Mapped[str] = mapped_column(String(16), nullable=False, default="1.0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -791,6 +810,10 @@ class DecisionReceipt(Base):
         CheckConstraint(
             "resulting_state IN ('READY', 'DEFERRED', 'DECISION_PENDING', 'ESCALATED', 'STOPPED')",
             name="ck_decision_receipts_resulting_state",
+        ),
+        CheckConstraint(
+            "scoring_artifact_classification IN ('SYNTHETIC', 'PRODUCTION', 'NOT_APPLICABLE')",
+            name="ck_decision_receipts_scoring_classification",
         ),
         Index("ix_decision_receipts_case", "merchant_id", "recovery_case_id", "created_at"),
     )
@@ -891,6 +914,76 @@ class RecoveryAction(TimestampColumns, Base):
             "status",
             "reconciliation_deadline",
             postgresql_where=text("status = 'UNKNOWN'"),
+        ),
+    )
+
+
+class CustomerIntervention(TimestampColumns, Base):
+    """One durable cross-playbook customer contact coordination lease."""
+
+    __tablename__ = "customer_interventions"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    customer_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    owner_case_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    recovery_action_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    coordinated_case_ids: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    cooldown_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    close_reason: Mapped[str | None] = mapped_column(String(128))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["merchant_id", "customer_id"],
+            ["customers.merchant_id", "customers.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "owner_case_id"],
+            ["recovery_cases.merchant_id", "recovery_cases.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "recovery_action_id"],
+            ["recovery_actions.merchant_id", "recovery_actions.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["merchant_id", "policy_version"],
+            ["merchant_policy_versions.merchant_id", "merchant_policy_versions.version"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "merchant_id", "recovery_action_id", name="uq_customer_interventions_action"
+        ),
+        CheckConstraint("status IN ('ACTIVE', 'CLOSED')", name="ck_customer_interventions_status"),
+        CheckConstraint("cooldown_until > created_at", name="ck_customer_interventions_cooldown"),
+        CheckConstraint(
+            "jsonb_typeof(coordinated_case_ids) = 'array' "
+            "AND jsonb_array_length(coordinated_case_ids) > 0",
+            name="ck_customer_interventions_case_ids",
+        ),
+        CheckConstraint(
+            "(status = 'ACTIVE' AND closed_at IS NULL AND close_reason IS NULL) OR "
+            "(status = 'CLOSED' AND closed_at IS NOT NULL AND close_reason IS NOT NULL)",
+            name="ck_customer_interventions_close_metadata",
+        ),
+        Index(
+            "uq_customer_interventions_active_customer",
+            "merchant_id",
+            "customer_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        Index(
+            "ix_customer_interventions_maintenance",
+            "status",
+            "cooldown_until",
+            postgresql_where=text("status = 'ACTIVE'"),
         ),
     )
 

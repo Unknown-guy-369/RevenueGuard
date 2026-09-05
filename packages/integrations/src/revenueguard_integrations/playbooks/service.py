@@ -57,6 +57,13 @@ class PromiseMaintenanceResult:
     escalation_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PortfolioMaintenanceResult:
+    merchants_evaluated: int
+    assessments_applied: int
+    incidents_resolved: int
+
+
 class ReceivablesPlaybookService:
     def __init__(
         self,
@@ -191,6 +198,16 @@ class ReceivablesPlaybookService:
                 occurred_at=at,
             )
             disposition = "AUTOMATION_FROZEN_HUMAN_ESCALATION"
+        elif extraction.intent is PromiseIntent.ALREADY_PAID:
+            await self._repository.freeze_already_paid_claim_and_escalate(
+                escalation_id=escalation_id,
+                merchant_id=merchant_id,
+                case_id=case.id,
+                invoice_id=invoice_id,
+                customer_response_id=response.id,
+                occurred_at=at,
+            )
+            disposition = "AUTHORITATIVE_VERIFICATION_REQUIRED"
         else:
             await self._repository.store_receivable_escalation(
                 escalation_id=escalation_id,
@@ -198,18 +215,10 @@ class ReceivablesPlaybookService:
                 case_id=case.id,
                 invoice_id=invoice_id,
                 customer_response_id=response.id,
-                reason_code=(
-                    "CUSTOMER_REPORTED_ALREADY_PAID"
-                    if extraction.intent is PromiseIntent.ALREADY_PAID
-                    else "CUSTOMER_RESPONSE_REQUIRES_REVIEW"
-                ),
+                reason_code="CUSTOMER_RESPONSE_REQUIRES_REVIEW",
                 occurred_at=at,
             )
-            disposition = (
-                "AUTHORITATIVE_VERIFICATION_REQUIRED"
-                if extraction.intent is PromiseIntent.ALREADY_PAID
-                else "HUMAN_REVIEW_REQUIRED"
-            )
+            disposition = "HUMAN_REVIEW_REQUIRED"
         return CustomerResponseResult(
             response.id,
             case.id,
@@ -284,6 +293,8 @@ class ReceivablesPlaybookService:
             incidents = await self._recovery_repository.active_incidents(
                 merchant_id=promise.merchant_id,
                 evaluated_at=evaluated_at,
+                case_id=checking.case_id,
+                diagnosis_code=checking.diagnosis,
             )
             decision = evaluate_policy(
                 policy,
@@ -528,6 +539,88 @@ class PaymentDegradationService:
                 incident_id=f"incident_{incident_token}",
             )
         return assessments
+
+    async def maintain_portfolios(
+        self, *, evaluated_at: datetime, merchant_limit: int
+    ) -> PortfolioMaintenanceResult:
+        evaluated = _utc(evaluated_at)
+        merchant_ids = await self._repository.portfolio_merchant_ids(
+            since=evaluated - self._policy.baseline_window,
+            limit=merchant_limit,
+        )
+        applied = 0
+        resolved = 0
+        from revenueguard_domain import assess_payment_degradation
+
+        for merchant_id in merchant_ids:
+            await self._repository.lock_merchant(merchant_id=merchant_id)
+            observations = await self._repository.payment_observations(
+                merchant_id=merchant_id,
+                since=evaluated - self._policy.baseline_window,
+                until=evaluated,
+            )
+            assessments = list(
+                assess_payment_degradation(
+                    observations,
+                    evaluated_at=evaluated,
+                    policy=self._policy,
+                )
+            )
+            assessed_dimensions = {
+                (item.payment_method, item.issuer_family, item.error_family) for item in assessments
+            }
+            active_incidents = await self._repository.active_incidents_for_maintenance(
+                merchant_id=merchant_id
+            )
+            for incident in active_incidents:
+                dimension = (
+                    incident.payment_method or "UNKNOWN",
+                    incident.issuer_family or "UNKNOWN",
+                    incident.error_family or "UNKNOWN",
+                )
+                if dimension in assessed_dimensions:
+                    continue
+                assessments.append(
+                    DegradationAssessment(
+                        merchant_id=merchant_id,
+                        payment_method=dimension[0],
+                        issuer_family=dimension[1],
+                        error_family=dimension[2],
+                        baseline_total=0,
+                        baseline_failures=0,
+                        current_total=0,
+                        current_failures=0,
+                        baseline_failure_rate_basis_points=0,
+                        current_failure_rate_basis_points=0,
+                        failure_rate_increase_basis_points=0,
+                        failure_rate_ratio_basis_points=10_000,
+                        degraded=False,
+                        evaluated_at=evaluated,
+                        policy_version=self._policy.version,
+                    )
+                )
+            for assessment in assessments:
+                incident_token = _stable_token(
+                    assessment.merchant_id,
+                    assessment.payment_method,
+                    assessment.issuer_family,
+                    assessment.error_family,
+                    assessment.evaluated_at.isoformat(),
+                )
+                applied_incident = await self._repository.apply_degradation_assessment(
+                    assessment,
+                    policy=self._policy,
+                    incident_id=f"incident_{incident_token}",
+                )
+                if applied_incident is not None:
+                    applied += 1
+                    if applied_incident.status == "RESOLVED":
+                        resolved += 1
+        return PortfolioMaintenanceResult(
+            merchants_evaluated=len(merchant_ids),
+            assessments_applied=applied,
+            incidents_resolved=resolved,
+        )
 
 
 def _stable_token(*parts: str) -> str:

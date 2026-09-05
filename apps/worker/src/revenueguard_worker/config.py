@@ -31,6 +31,9 @@ class WorkerSettings(BaseSettings):
     action_dispatch_stale_after_seconds: int = Field(default=60, ge=5, le=3_600)
     action_reconciliation_batch_size: int = Field(default=50, ge=1, le=1_000)
     action_unknown_ttl_seconds: int = Field(default=3_600, ge=60, le=604_800)
+    deferred_case_reevaluation_batch_size: int = Field(default=50, ge=1, le=1_000)
+    portfolio_maintenance_merchant_batch_size: int = Field(default=50, ge=1, le=1_000)
+    customer_intervention_maintenance_batch_size: int = Field(default=100, ge=1, le=1_000)
     agent_model_provider: AgentModelProvider = AgentModelProvider.DISABLED
     agent_model_base_url: str | None = None
     agent_model_name: str | None = None

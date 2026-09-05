@@ -2,7 +2,7 @@
 
 RevenueGuard is a bounded, event-driven revenue recovery control plane for Razorpay merchants. It is designed to detect revenue at risk, coordinate safe recovery decisions, apply deterministic merchant policy, execute approved actions idempotently, and count recovered money only after authoritative verification.
 
-> **Current status — Phase 6 complete:** the three core playbooks now cover failed subscriptions, durable B2B promises-to-pay, and evidence-backed payment degradation incidents while preserving deterministic policy, idempotent execution, and authoritative recovery accounting.
+> **Current status — Phase 7 complete:** portfolio intelligence now coordinates systemic incident response, policy-bounded expected-net ranking, and one durable customer intervention across playbooks while preserving idempotent execution and authoritative recovery accounting.
 
 ## Safety model
 
@@ -42,17 +42,17 @@ flowchart LR
     Verify --> Case
 ```
 
-Phase 5 inserts bounded diagnosis assistance, strategy generation, ranking, and explanation before the deterministic policy boundary. Phase 6 completes the three core playbooks with durable promise maintenance and transparent degradation incidents. See [the Phase 6 playbook guide](docs/playbooks/PHASE_6.md). The Phase 4 outbox, execution, uncertainty, and verification guarantees remain unchanged.
+Phase 5 inserts bounded diagnosis assistance, strategy generation, ranking, and explanation before the deterministic policy boundary. Phase 6 completes the three core playbooks with durable promise maintenance and transparent degradation incidents. Phase 7 adds streaming and scheduled incident maintenance, cross-case customer contact coordination, and versioned expected-net ranking. See [the Phase 6 playbook guide](docs/playbooks/PHASE_6.md) and [the Phase 7 portfolio guide](docs/portfolio/PHASE_7.md). The Phase 4 outbox, execution, uncertainty, and verification guarantees remain unchanged.
 
 ## Current capabilities
 
 | Area     | Implemented                                                                                                                                         |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | API      | Raw-body Razorpay HMAC verification, tenant resolution, durable acceptance/deduplication, and system endpoints                                      |
-| Worker   | Durable event/action dispatch, promise maintenance, bounded explicit-failure retry, crash-to-`UNKNOWN`, reconciliation, and dead-letter retention |
+| Worker   | Durable event/action dispatch, promise and portfolio maintenance, bounded explicit-failure retry, crash-to-`UNKNOWN`, reconciliation, and dead-letter retention |
 | Web      | Responsive Next.js operational dashboard based on the Coinbase design reference                                                                     |
-| Database | Merchant-scoped inboxes, invoices, promises, incidents, cases, decisions, outbox actions, attempts, and append-only verified outcomes via Alembic |
-| Domain   | Typed cases/playbooks, deterministic policy, stable action identity, integer-basis-point incident rules, and verified outcome contracts             |
+| Database | Merchant-scoped inboxes, invoices, promises, incidents, coordinated customer interventions, decisions, actions, and verified outcomes via Alembic |
+| Domain   | Typed cases/playbooks, deterministic policy, integer portfolio rules and scoring, stable action identity, and verified outcome contracts             |
 | Agents   | Typed six-step LangGraph, OpenAI-compatible cloud/local models, read-only tools, schema validation, redaction, budgets, and deterministic fallbacks |
 | Quality  | Ruff, mypy, pytest, ESLint, TypeScript, Vitest, Prettier, and production build gates                                                                |
 | Delivery | Six-mode webhook replay CLI plus the existing containers, locked dependencies, Make targets, and CI                                                 |
@@ -286,6 +286,7 @@ The checked-in `.env.example` contains local, non-secret defaults. Important var
 - `REVENUEGUARD_RAZORPAY_MERCHANT_ID`
 - `REVENUEGUARD_ACTION_PROVIDER` (`SIMULATOR` by default or `RAZORPAY_TEST`)
 - `REVENUEGUARD_ACTION_UNKNOWN_TTL_SECONDS`
+- `REVENUEGUARD_DEFERRED_CASE_REEVALUATION_BATCH_SIZE`
 - `REVENUEGUARD_API_URL`
 
 Razorpay's direct webhook requests do not include RevenueGuard's internal merchant-routing

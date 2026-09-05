@@ -147,8 +147,9 @@ The `customer_interventions` table is keyed by merchant and intervention ID. It 
 canonical customer ID, owning case and action, coordinated case IDs, status, `cooldown_until`,
 model/policy versions, and timestamps. A partial unique index allows at most one `ACTIVE`
 intervention per `(merchant_id, customer_id)`. A separate link table is unnecessary because the
-coordinated case IDs are a frozen JSON list and every owner reference uses a tenant-scoped foreign
-key. Historical intervention rows are retained for auditability.
+coordinated case IDs are a durable JSON list and every owner reference uses a tenant-scoped foreign
+key. Later active cases are appended under the same customer lock; historical intervention rows are
+retained for auditability.
 
 A successful contact keeps the intervention active until `cooldown_until`; a failed action may be
 closed immediately. An `UNKNOWN` action never releases the intervention automatically. Scheduled

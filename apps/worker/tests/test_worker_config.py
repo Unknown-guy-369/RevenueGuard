@@ -14,6 +14,25 @@ def test_worker_uses_json_and_late_acknowledgement() -> None:
     assert celery_app.conf.worker_prefetch_multiplier == 1
 
 
+def test_deferred_case_reevaluation_batch_is_bounded() -> None:
+    settings = WorkerSettings(_env_file=None)
+
+    assert settings.deferred_case_reevaluation_batch_size == 50
+
+    with pytest.raises(ValidationError):
+        WorkerSettings(_env_file=None, deferred_case_reevaluation_batch_size=0)
+
+
+def test_portfolio_maintenance_batches_are_bounded() -> None:
+    settings = WorkerSettings(_env_file=None)
+
+    assert settings.portfolio_maintenance_merchant_batch_size == 50
+    assert settings.customer_intervention_maintenance_batch_size == 100
+
+    with pytest.raises(ValidationError):
+        WorkerSettings(_env_file=None, portfolio_maintenance_merchant_batch_size=0)
+
+
 def test_diagnostic_task_has_no_external_side_effect() -> None:
     assert ping.run() == {"status": "ok", "service": "revenueguard-worker"}
 

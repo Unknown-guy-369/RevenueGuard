@@ -20,7 +20,7 @@ from revenueguard_domain import (
 from revenueguard_domain import (
     PromiseToPay as DomainPromiseToPay,
 )
-from sqlalchemy import Select, and_, or_, select, update
+from sqlalchemy import Select, and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,12 +51,10 @@ class PlaybookRepository:
         self._session = session
 
     async def lock_merchant(self, *, merchant_id: str) -> None:
-        merchant = (
-            await self._session.scalars(
-                select(Merchant).where(Merchant.id == merchant_id).with_for_update()
-            )
-        ).one_or_none()
-        if merchant is None:
+        await self._session.scalar(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(merchant_id, 0)))
+        )
+        if await self._session.get(Merchant, merchant_id) is None:
             raise LookupError("merchant does not exist")
 
     async def record_overdue_invoice(
@@ -379,6 +377,46 @@ class PlaybookRepository:
             occurred_at=at,
         )
 
+    async def freeze_already_paid_claim_and_escalate(
+        self,
+        *,
+        escalation_id: str,
+        merchant_id: str,
+        case_id: str,
+        invoice_id: str,
+        customer_response_id: str,
+        occurred_at: datetime,
+    ) -> ReceivableEscalation:
+        """Freeze outreach without treating the customer's claim as proof of payment."""
+        at = _utc(occurred_at)
+        await self._session.execute(
+            update(Invoice)
+            .where(
+                Invoice.merchant_id == merchant_id,
+                Invoice.id == invoice_id,
+                Invoice.status.in_(("OPEN", "OVERDUE", "PROMISED")),
+            )
+            .values(status="ESCALATED", automation_frozen_at=at, updated_at=at)
+        )
+        await self._session.execute(
+            update(PromiseToPay)
+            .where(
+                PromiseToPay.merchant_id == merchant_id,
+                PromiseToPay.invoice_id == invoice_id,
+                PromiseToPay.status == "ACTIVE",
+            )
+            .values(status="CANCELLED", updated_at=at)
+        )
+        return await self.store_receivable_escalation(
+            escalation_id=escalation_id,
+            merchant_id=merchant_id,
+            case_id=case_id,
+            invoice_id=invoice_id,
+            customer_response_id=customer_response_id,
+            reason_code="CUSTOMER_REPORTED_ALREADY_PAID",
+            occurred_at=at,
+        )
+
     async def store_receivable_escalation(
         self,
         *,
@@ -572,6 +610,40 @@ class PlaybookRepository:
             for row in rows
         )
 
+    async def portfolio_merchant_ids(self, *, since: datetime, limit: int) -> tuple[str, ...]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        observed = (
+            await self._session.scalars(
+                select(PaymentOutcomeObservation.merchant_id)
+                .where(PaymentOutcomeObservation.occurred_at >= _utc(since))
+                .distinct()
+            )
+        ).all()
+        active = (
+            await self._session.scalars(
+                select(PortfolioIncident.merchant_id)
+                .where(PortfolioIncident.status == "ACTIVE")
+                .distinct()
+            )
+        ).all()
+        return tuple(sorted({*observed, *active})[:limit])
+
+    async def active_incidents_for_maintenance(
+        self, *, merchant_id: str
+    ) -> tuple[PortfolioIncident, ...]:
+        rows = (
+            await self._session.scalars(
+                select(PortfolioIncident)
+                .where(
+                    PortfolioIncident.merchant_id == merchant_id,
+                    PortfolioIncident.status == "ACTIVE",
+                )
+                .order_by(PortfolioIncident.dimension_key)
+            )
+        ).all()
+        return tuple(rows)
+
     async def apply_degradation_assessment(
         self,
         assessment: DegradationAssessment,
@@ -620,6 +692,8 @@ class PlaybookRepository:
             return active
         if active is None:
             return None
+        if assessment.evaluated_at < active.updated_at + policy.current_window:
+            return active
         active.clear_window_count += 1
         active.ends_at = assessment.evaluated_at + policy.incident_ttl
         active.updated_at = assessment.evaluated_at

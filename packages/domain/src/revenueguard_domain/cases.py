@@ -63,6 +63,7 @@ ALLOWED_TRANSITIONS: Final[Mapping[CaseState, frozenset[CaseState]]] = MappingPr
             {
                 CaseState.RECOVERED,
                 CaseState.DECISION_PENDING,
+                CaseState.UNKNOWN,
                 CaseState.STOPPED,
             }
         ),
