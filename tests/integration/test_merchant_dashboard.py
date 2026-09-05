@@ -206,6 +206,42 @@ async def test_simulation_submission_is_durable_signed_and_idempotent(
         assert events[0].raw_payload["event"] == "subscription.pending"
 
 
+async def test_authentication_failure_simulation_is_signed_and_normalizable(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _merchant(session_factory)
+    service = DatabaseMerchantDashboardService(
+        session_factory,
+        clock=lambda: NOW,
+        token_factory=lambda: "authentication_session",
+        simulator_secret="simulator-test-secret",
+    )
+    created = await service.create_simulation(
+        MERCHANT_ID,
+        SimulationCreateRequest(
+            scenario="AUTHENTICATION_FAILURE",
+            flow_type="ONE_TIME",
+            amount_minor=24_990,
+            currency="INR",
+        ),
+    )
+
+    submitted = await service.submit_simulation(created.simulation_id)
+
+    async with session_factory() as session:
+        webhook = await session.scalar(
+            select(WebhookEvent).where(
+                WebhookEvent.merchant_id == MERCHANT_ID,
+                WebhookEvent.provider_event_id == submitted.provider_event_id,
+            )
+        )
+        assert webhook is not None
+        assert webhook.signature_valid is True
+        assert webhook.raw_payload["event"] == "payment.failed"
+        payment = webhook.raw_payload["payload"]["payment"]["entity"]
+        assert payment["error_reason"] == "authentication_failed"
+
+
 async def test_expired_simulation_is_persisted_before_conflict_is_returned(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

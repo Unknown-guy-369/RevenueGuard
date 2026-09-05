@@ -168,7 +168,13 @@ class ReviewDecisionResult(_Contract):
 
 
 class SimulationCreateRequest(_Contract):
-    scenario: Literal["SUCCESS", "INSUFFICIENT_FUNDS", "ISSUER_OUTAGE", "TIMEOUT"]
+    scenario: Literal[
+        "SUCCESS",
+        "INSUFFICIENT_FUNDS",
+        "AUTHENTICATION_FAILURE",
+        "ISSUER_OUTAGE",
+        "TIMEOUT",
+    ]
     flow_type: Literal["ONE_TIME", "SUBSCRIPTION"]
     amount_minor: int = Field(gt=0, le=100_000_000)
     currency: str = Field(default="INR", pattern=r"^[A-Z]{3}$")
@@ -198,6 +204,19 @@ class SimulationEvents(_Contract):
     simulation_id: str
     status: str
     classification: Literal["SYNTHETIC"]
+    amount_minor: int = Field(gt=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    case_id: str | None = None
+    case_state: str | None = None
+    decision_id: str | None = None
+    policy_result: str | None = None
+    policy_reason_codes: tuple[str, ...] = ()
+    action_id: str | None = None
+    action_type: str | None = None
+    action_status: str | None = None
+    outcome_id: str | None = None
+    outcome_authoritative: bool = False
+    recovered_amount_minor: int = Field(default=0, ge=0)
     events: tuple[SimulationEventItem, ...]
 
 
@@ -206,6 +225,14 @@ class SimulationAttemptResult(_Contract):
     status: str
     classification: Literal["SYNTHETIC"]
     provider_event_id: str
+
+
+class SimulationRecoveryResult(_Contract):
+    simulation_id: str
+    status: Literal["SUBMITTED"]
+    classification: Literal["SYNTHETIC"]
+    provider_event_id: str
+    action_id: str
 
 
 class MerchantDashboardService(Protocol):
@@ -247,6 +274,10 @@ class MerchantDashboardService(Protocol):
     async def simulation(self, simulation_id: str) -> SimulationSessionView: ...
 
     async def submit_simulation(self, simulation_id: str) -> SimulationAttemptResult: ...
+
+    async def submit_simulation_recovery(
+        self, merchant_id: str, simulation_id: str
+    ) -> SimulationRecoveryResult: ...
 
     async def simulation_events(self, merchant_id: str, simulation_id: str) -> SimulationEvents: ...
 

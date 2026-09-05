@@ -15,6 +15,7 @@ from uuid import uuid4
 from revenueguard_domain import HumanReviewDecision, ReviewDecisionType
 from revenueguard_integrations.persistence import (
     AsyncSessionFactory,
+    DecisionReceipt,
     EventDispatch,
     EventIngestionRepository,
     HumanReview,
@@ -65,6 +66,7 @@ from revenueguard_api.merchant_dashboard import (
     SimulationCreateRequest,
     SimulationEventItem,
     SimulationEvents,
+    SimulationRecoveryResult,
     SimulationSessionView,
 )
 from revenueguard_api.webhooks import verify_razorpay_signature
@@ -596,6 +598,95 @@ class DatabaseMerchantDashboardService:
             provider_event_id=provider_event_id,
         )
 
+    async def submit_simulation_recovery(
+        self, merchant_id: str, simulation_id: str
+    ) -> SimulationRecoveryResult:
+        """Persist signed synthetic success evidence for an executed payment-link action.
+
+        This endpoint is intentionally merchant-authenticated and simulation-scoped. It does not
+        mark an action or case recovered; the ordinary worker must normalize the stored event and
+        the ordinary signed-event verifier must validate its amount and currency first.
+        """
+
+        now = self._now()
+        provider_event_id = f"sim_recovery_evt_{sha256(simulation_id.encode()).hexdigest()[:32]}"
+        action_id = ""
+        try:
+            async with session_scope(self._session_factory) as session:
+                row = await session.scalar(
+                    select(SimulationSession)
+                    .where(
+                        SimulationSession.merchant_id == merchant_id,
+                        SimulationSession.id == simulation_id,
+                    )
+                    .with_for_update()
+                )
+                if row is None:
+                    raise DashboardNotFoundError("simulation session was not found")
+                if row.scenario != "AUTHENTICATION_FAILURE" or row.status != "SUBMITTED":
+                    raise MerchantDashboardConflictError(
+                        "recovery evidence requires a submitted authentication-failure simulation"
+                    )
+                recovery_case = await _simulation_case(session, row)
+                action = (
+                    await session.scalar(
+                        select(RecoveryAction)
+                        .where(
+                            RecoveryAction.merchant_id == merchant_id,
+                            RecoveryAction.recovery_case_id == recovery_case.id,
+                            RecoveryAction.action_type == "CREATE_PAYMENT_LINK",
+                        )
+                        .order_by(RecoveryAction.created_at.desc())
+                        .limit(1)
+                    )
+                    if recovery_case
+                    else None
+                )
+                if (
+                    recovery_case is None
+                    or action is None
+                    or action.provider_object_id is None
+                    or action.status not in {"SUCCEEDED", "UNKNOWN"}
+                    or recovery_case.state not in {"VERIFYING", "UNKNOWN", "RECOVERED"}
+                ):
+                    raise MerchantDashboardConflictError(
+                        "payment-link action has not reached outcome verification"
+                    )
+                payload = _simulation_recovery_payload(
+                    row,
+                    payment_link_id=action.provider_object_id,
+                    occurred_at=now,
+                )
+                raw_body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+                signature = hmac.new(self._simulator_secret.encode(), raw_body, sha256).hexdigest()
+                if not verify_razorpay_signature(raw_body, signature, self._simulator_secret):
+                    raise AssertionError("synthetic recovery signature verification failed")
+                await EventIngestionRepository(session).record_webhook(
+                    event_id=str(uuid4()),
+                    merchant_id=merchant_id,
+                    provider="SIMULATOR",
+                    provider_event_id=provider_event_id,
+                    event_type="payment_link.paid",
+                    entity_id=action.provider_object_id,
+                    raw_body=raw_body,
+                    raw_payload=payload,
+                    occurred_at=now,
+                    received_at=now,
+                    correlation_id=f"corr_{sha256(provider_event_id.encode()).hexdigest()[:48]}",
+                )
+                action_id = action.id
+        except DashboardNotFoundError, MerchantDashboardConflictError:
+            raise
+        except SQLAlchemyError as error:
+            raise DashboardPersistenceError("simulation recovery submission failed") from error
+        return SimulationRecoveryResult(
+            simulation_id=simulation_id,
+            status="SUBMITTED",
+            classification="SYNTHETIC",
+            provider_event_id=provider_event_id,
+            action_id=action_id,
+        )
+
     async def simulation_events(self, merchant_id: str, simulation_id: str) -> SimulationEvents:
         try:
             async with self._session_factory() as session:
@@ -652,6 +743,19 @@ class DatabaseMerchantDashboardService:
                     if recovery_case
                     else None
                 )
+                decision = (
+                    await session.scalar(
+                        select(DecisionReceipt)
+                        .where(
+                            DecisionReceipt.merchant_id == merchant_id,
+                            DecisionReceipt.recovery_case_id == recovery_case.id,
+                        )
+                        .order_by(DecisionReceipt.created_at.desc())
+                        .limit(1)
+                    )
+                    if recovery_case
+                    else None
+                )
                 outcome = (
                     await session.scalar(
                         select(VerifiedOutcome)
@@ -659,7 +763,10 @@ class DatabaseMerchantDashboardService:
                             VerifiedOutcome.merchant_id == merchant_id,
                             VerifiedOutcome.recovery_case_id == recovery_case.id,
                         )
-                        .order_by(VerifiedOutcome.observed_at.desc())
+                        .order_by(
+                            VerifiedOutcome.is_authoritative.desc(),
+                            VerifiedOutcome.observed_at.desc(),
+                        )
                         .limit(1)
                     )
                     if recovery_case
@@ -685,6 +792,19 @@ class DatabaseMerchantDashboardService:
             simulation_id=row.id,
             status=status,
             classification="SYNTHETIC",
+            amount_minor=row.amount_minor,
+            currency=row.currency,
+            case_id=recovery_case.id if recovery_case else None,
+            case_state=recovery_case.state if recovery_case else None,
+            decision_id=decision.id if decision else None,
+            policy_result=decision.policy_result if decision else None,
+            policy_reason_codes=tuple(decision.policy_reason_codes) if decision else (),
+            action_id=action.id if action else None,
+            action_type=action.action_type if action else None,
+            action_status=action.status if action else None,
+            outcome_id=outcome.id if outcome else None,
+            outcome_authoritative=outcome.is_authoritative if outcome else False,
+            recovered_amount_minor=outcome.recovered_amount_minor if outcome else 0,
             events=events,
         )
 
@@ -990,6 +1110,11 @@ def _simulation_payload(row: SimulationSession, *, occurred_at: datetime) -> dic
                 "insufficient_funds",
                 "The synthetic account has insufficient funds.",
             ),
+            "AUTHENTICATION_FAILURE": (
+                "BAD_REQUEST_ERROR",
+                "authentication_failed",
+                "Synthetic payment authentication was not completed.",
+            ),
             "ISSUER_OUTAGE": (
                 "SERVER_ERROR",
                 "issuer_unavailable",
@@ -1027,6 +1152,52 @@ def _simulation_payload(row: SimulationSession, *, occurred_at: datetime) -> dic
             "classification": "SYNTHETIC",
             "generator_version": row.generator_version,
             "simulation_id": row.id,
+        },
+    }
+
+
+def _simulation_recovery_payload(
+    row: SimulationSession,
+    *,
+    payment_link_id: str,
+    occurred_at: datetime,
+) -> dict[str, object]:
+    created_at = int(occurred_at.timestamp())
+    return {
+        "entity": "event",
+        "account_id": "acc_synthetic_revenueguard_demo",
+        "event": "payment_link.paid",
+        "contains": ["payment_link", "payment"],
+        "payload": {
+            "payment_link": {
+                "entity": {
+                    "id": payment_link_id,
+                    "entity": "payment_link",
+                    "amount": row.amount_minor,
+                    "currency": row.currency,
+                    "customer_id": row.customer_id,
+                    "status": "paid",
+                    "created_at": created_at,
+                }
+            },
+            "payment": {
+                "entity": {
+                    "id": row.payment_id,
+                    "entity": "payment",
+                    "amount": row.amount_minor,
+                    "currency": row.currency,
+                    "status": "captured",
+                    "customer_id": row.customer_id,
+                    "created_at": created_at,
+                }
+            },
+        },
+        "created_at": created_at,
+        "notes": {
+            "classification": "SYNTHETIC",
+            "generator_version": row.generator_version,
+            "simulation_id": row.id,
+            "purpose": "INTEGRATED_RECOVERY_EVIDENCE",
         },
     }
 

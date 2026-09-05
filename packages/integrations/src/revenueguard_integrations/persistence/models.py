@@ -1481,7 +1481,8 @@ class SimulationSession(Base):
         UniqueConstraint("merchant_id", "payment_id", name="uq_simulation_sessions_payment"),
         UniqueConstraint("merchant_id", "provider_event_id", name="uq_simulation_sessions_event"),
         CheckConstraint(
-            "scenario IN ('SUCCESS', 'INSUFFICIENT_FUNDS', 'ISSUER_OUTAGE', 'TIMEOUT')",
+            "scenario IN ('SUCCESS', 'INSUFFICIENT_FUNDS', 'AUTHENTICATION_FAILURE', "
+            "'ISSUER_OUTAGE', 'TIMEOUT')",
             name="ck_simulation_sessions_scenario",
         ),
         CheckConstraint(

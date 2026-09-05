@@ -1,0 +1,267 @@
+{
+  "batch": {
+    "case_count": 8,
+    "currency": "INR",
+    "deferred_case_count": 3,
+    "human_review_case_count": 1,
+    "recovered_case_count": 3,
+    "recovery_rate_basis_points": 3753,
+    "revenue_at_risk_minor": 201700,
+    "verified_gross_recovered_minor": 75700
+  },
+  "boundaries_observed": [
+    "authenticated simulation API",
+    "signed durable webhook inbox",
+    "Redis/Celery event dispatch",
+    "normalization and recovery case state machine",
+    "bounded case intelligence and deterministic policy",
+    "durable action outbox and executor",
+    "signed outcome verification",
+    "PostgreSQL-backed dashboard audit reads"
+  ],
+  "cases": [
+    {
+      "action_status": "SUCCEEDED",
+      "action_type": "CREATE_PAYMENT_LINK",
+      "amount_minor": 15900,
+      "audit_counts": {
+        "actions": 1,
+        "decisions": 1,
+        "outcomes": 2,
+        "transitions": 7
+      },
+      "currency": "INR",
+      "expected_state": "RECOVERED",
+      "name": "recover_auth_1",
+      "observed_case_state": "RECOVERED",
+      "observed_status": "COMPLETED",
+      "outcome_authoritative": true,
+      "passed": true,
+      "policy_reason_codes": [
+        "CHANNEL_CONSENT_NOT_GRANTED",
+        "POLICY_AUTHORIZED"
+      ],
+      "policy_result": "PROCEED",
+      "provider_event_id": "sim_evt_8e606cd314c605edf6146c3f4ff036b6",
+      "scenario": "AUTHENTICATION_FAILURE",
+      "simulation_id": "sim_aMatG15WdwbYu0TEeFrPmyd9MQTIwn-d",
+      "verified_recovered_minor": 15900
+    },
+    {
+      "action_status": "SUCCEEDED",
+      "action_type": "CREATE_PAYMENT_LINK",
+      "amount_minor": 24900,
+      "audit_counts": {
+        "actions": 1,
+        "decisions": 1,
+        "outcomes": 2,
+        "transitions": 7
+      },
+      "currency": "INR",
+      "expected_state": "RECOVERED",
+      "name": "recover_auth_2",
+      "observed_case_state": "RECOVERED",
+      "observed_status": "COMPLETED",
+      "outcome_authoritative": true,
+      "passed": true,
+      "policy_reason_codes": [
+        "CHANNEL_CONSENT_NOT_GRANTED",
+        "POLICY_AUTHORIZED"
+      ],
+      "policy_result": "PROCEED",
+      "provider_event_id": "sim_evt_42b50e8e129e16bd2ca3870af3551176",
+      "scenario": "AUTHENTICATION_FAILURE",
+      "simulation_id": "sim_Un5gs6LEb_xrSElehPXcCO4YjNm60BBO",
+      "verified_recovered_minor": 24900
+    },
+    {
+      "action_status": "SUCCEEDED",
+      "action_type": "CREATE_PAYMENT_LINK",
+      "amount_minor": 34900,
+      "audit_counts": {
+        "actions": 1,
+        "decisions": 1,
+        "outcomes": 2,
+        "transitions": 7
+      },
+      "currency": "INR",
+      "expected_state": "RECOVERED",
+      "name": "recover_auth_3",
+      "observed_case_state": "RECOVERED",
+      "observed_status": "COMPLETED",
+      "outcome_authoritative": true,
+      "passed": true,
+      "policy_reason_codes": [
+        "CHANNEL_CONSENT_NOT_GRANTED",
+        "POLICY_AUTHORIZED"
+      ],
+      "policy_result": "PROCEED",
+      "provider_event_id": "sim_evt_dd243e8c835c077c7ed3e0412c9a0b6c",
+      "scenario": "AUTHENTICATION_FAILURE",
+      "simulation_id": "sim_3H6iPvo81zEFEWlkVNbHU76J8Z9fO9_A",
+      "verified_recovered_minor": 34900
+    },
+    {
+      "action_status": null,
+      "action_type": null,
+      "amount_minor": 75000,
+      "audit_counts": {
+        "actions": 0,
+        "decisions": 1,
+        "outcomes": 0,
+        "transitions": 4
+      },
+      "currency": "INR",
+      "expected_state": "ESCALATED",
+      "name": "high_value_review",
+      "observed_case_state": "ESCALATED",
+      "observed_status": "PROCESSING",
+      "outcome_authoritative": false,
+      "passed": true,
+      "policy_reason_codes": [
+        "CHANNEL_CONSENT_NOT_GRANTED",
+        "HUMAN_REVIEW_REQUIRED"
+      ],
+      "policy_result": "REQUIRE_HUMAN",
+      "provider_event_id": "sim_evt_50ae92cc385afde70e44cd81a5556815",
+      "scenario": "AUTHENTICATION_FAILURE",
+      "simulation_id": "sim_s3o8EpKUJTNH97qd0X6N1H4kFWvleZE0",
+      "verified_recovered_minor": 0
+    },
+    {
+      "action_status": null,
+      "action_type": null,
+      "amount_minor": 12000,
+      "audit_counts": {
+        "actions": 0,
+        "decisions": 1,
+        "outcomes": 0,
+        "transitions": 4
+      },
+      "currency": "INR",
+      "expected_state": "DEFERRED",
+      "name": "insufficient_funds_defer",
+      "observed_case_state": "DEFERRED",
+      "observed_status": "PROCESSING",
+      "outcome_authoritative": false,
+      "passed": true,
+      "policy_reason_codes": [
+        "DIAGNOSIS_DELAY"
+      ],
+      "policy_result": "DEFER",
+      "provider_event_id": "sim_evt_38ac292d0e1ebc60a2cc8223287a9bd6",
+      "scenario": "INSUFFICIENT_FUNDS",
+      "simulation_id": "sim_UnaKIf9WmYzvIqx5XzwvyBELgAnN94O5",
+      "verified_recovered_minor": 0
+    },
+    {
+      "action_status": null,
+      "action_type": null,
+      "amount_minor": 18000,
+      "audit_counts": {
+        "actions": 0,
+        "decisions": 1,
+        "outcomes": 0,
+        "transitions": 4
+      },
+      "currency": "INR",
+      "expected_state": "DEFERRED",
+      "name": "issuer_outage_defer",
+      "observed_case_state": "DEFERRED",
+      "observed_status": "PROCESSING",
+      "outcome_authoritative": false,
+      "passed": true,
+      "policy_reason_codes": [
+        "DIAGNOSIS_DELAY"
+      ],
+      "policy_result": "DEFER",
+      "provider_event_id": "sim_evt_d91273f87d68a277cb0eeba7bac0cd44",
+      "scenario": "ISSUER_OUTAGE",
+      "simulation_id": "sim_cpJpA59VvI_4sfrGGLkZEd9S-S1nJ39S",
+      "verified_recovered_minor": 0
+    },
+    {
+      "action_status": null,
+      "action_type": null,
+      "amount_minor": 21000,
+      "audit_counts": {
+        "actions": 0,
+        "decisions": 1,
+        "outcomes": 0,
+        "transitions": 4
+      },
+      "currency": "INR",
+      "expected_state": "DEFERRED",
+      "name": "timeout_safe_defer",
+      "observed_case_state": "DEFERRED",
+      "observed_status": "PROCESSING",
+      "outcome_authoritative": false,
+      "passed": true,
+      "policy_reason_codes": [
+        "LOW_CONFIDENCE_RETRY_DEFERRED"
+      ],
+      "policy_result": "DEFER",
+      "provider_event_id": "sim_evt_d6ced8c8788891c073155d0aaf85d712",
+      "scenario": "TIMEOUT",
+      "simulation_id": "sim_lDuvVGcQaOaS0a9omhBXCYW2LXyCFtp9",
+      "verified_recovered_minor": 0
+    },
+    {
+      "action_status": null,
+      "action_type": null,
+      "amount_minor": 9900,
+      "audit_counts": {
+        "actions": 0,
+        "decisions": 0,
+        "outcomes": 0,
+        "transitions": 0
+      },
+      "currency": "INR",
+      "expected_state": null,
+      "name": "already_successful",
+      "observed_case_state": null,
+      "observed_status": "COMPLETED",
+      "outcome_authoritative": false,
+      "passed": true,
+      "policy_reason_codes": [],
+      "policy_result": null,
+      "provider_event_id": "sim_evt_a7023007ac8f64121a26858f6c8a7b02",
+      "scenario": "SUCCESS",
+      "simulation_id": "sim_Vc2ZlZutW74G7Op9XJgjWsiQ_jnjcrI9",
+      "verified_recovered_minor": 0
+    }
+  ],
+  "completed_at": "2026-09-05T14:17:06.231172+00:00",
+  "evaluation_scope": "LIVE_LOCAL_INTEGRATION_BATCH",
+  "held_out_contract": {
+    "content_hash": "410c98c107148861ce42999e8ba0ff45c508c7bc5be9f0526ff527435c0d84d3",
+    "dataset_version": "held_out_v1",
+    "execution_note": "This live demo batch is representative integration evidence; it does not claim execution of all sealed held-out scenario oracles.",
+    "scenario_count": 29
+  },
+  "idempotency": {
+    "original_provider_event_id": "sim_evt_8e606cd314c605edf6146c3f4ff036b6",
+    "replayed_provider_event_id": "sim_evt_8e606cd314c605edf6146c3f4ff036b6",
+    "same_logical_event": true
+  },
+  "result": "PASS",
+  "safety_gates": {
+    "actions_beyond_limits": 0,
+    "policy_violations": 0,
+    "recovered_cases_missing_audit_evidence": 0,
+    "status": "PASS",
+    "unverified_amount_counted_as_recovered": 0
+  },
+  "schema_version": "1.0",
+  "simulation_disclosure": "All records and recovered amounts are synthetic Test Mode evidence, not production merchant revenue.",
+  "source": "SYNTHETIC",
+  "started_at": "2026-09-05T14:14:50.389585+00:00",
+  "system_readiness": {
+    "dependencies": {
+      "postgres": true,
+      "redis": true
+    },
+    "service": "revenueguard-api",
+    "status": "ready"
+  }
+}

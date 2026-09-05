@@ -11,6 +11,7 @@ from revenueguard_api.merchant_dashboard import (
     ReviewDecisionResult,
     SimulationAttemptResult,
     SimulationCreateRequest,
+    SimulationRecoveryResult,
     SimulationSessionView,
 )
 
@@ -103,6 +104,18 @@ class FakeMerchantDashboardService:
             provider_event_id="sim_evt_001",
         )
 
+    async def submit_simulation_recovery(
+        self, merchant_id: str, simulation_id: str
+    ) -> SimulationRecoveryResult:
+        self.merchant_ids.append(merchant_id)
+        return SimulationRecoveryResult(
+            simulation_id=simulation_id,
+            status="SUBMITTED",
+            classification="SYNTHETIC",
+            provider_event_id="sim_recovery_evt_001",
+            action_id="action_001",
+        )
+
 
 def _client(service: FakeMerchantDashboardService) -> AsyncClient:
     get_settings.cache_clear()
@@ -176,6 +189,27 @@ async def test_public_checkout_lookup_and_attempt_do_not_require_dashboard_token
     assert attempt.json()["provider_event_id"] == "sim_evt_001"
 
 
+async def test_simulated_recovery_evidence_requires_dashboard_authentication() -> None:
+    service = FakeMerchantDashboardService()
+    async with _client(service) as client:
+        missing = await client.post("/api/v1/simulations/sim_public_001/recovery-success")
+        submitted = await client.post(
+            "/api/v1/simulations/sim_public_001/recovery-success",
+            headers=_headers(),
+        )
+
+    assert missing.status_code == 401
+    assert submitted.status_code == 200
+    assert submitted.json() == {
+        "simulation_id": "sim_public_001",
+        "status": "SUBMITTED",
+        "classification": "SYNTHETIC",
+        "provider_event_id": "sim_recovery_evt_001",
+        "action_id": "action_001",
+    }
+    assert service.merchant_ids == [MERCHANT_ID]
+
+
 async def test_openapi_declares_merchant_dashboard_and_simulator_routes() -> None:
     async with _client(FakeMerchantDashboardService()) as client:
         paths = (await client.get("/openapi.json")).json()["paths"]
@@ -191,6 +225,7 @@ async def test_openapi_declares_merchant_dashboard_and_simulator_routes() -> Non
         "/api/v1/dashboard/reviews/{review_id}/decision",
         "/api/v1/simulations",
         "/api/v1/simulations/{simulation_id}/events",
+        "/api/v1/simulations/{simulation_id}/recovery-success",
         "/api/v1/public/simulations/{simulation_id}",
         "/api/v1/public/simulations/{simulation_id}/attempt",
     }.issubset(paths)

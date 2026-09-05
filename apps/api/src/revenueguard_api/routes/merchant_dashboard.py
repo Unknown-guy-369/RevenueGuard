@@ -24,6 +24,7 @@ from revenueguard_api.merchant_dashboard import (
     SimulationAttemptResult,
     SimulationCreateRequest,
     SimulationEvents,
+    SimulationRecoveryResult,
     SimulationSessionView,
 )
 from revenueguard_api.routes.dashboard import MerchantDependency
@@ -166,6 +167,20 @@ async def simulation_events(
 ) -> SimulationEvents:
     _validate_reference(simulation_id, "simulation")
     return await _map(service.simulation_events(merchant_id, simulation_id))
+
+
+@simulation_router.post(
+    "/{simulation_id}/recovery-success", response_model=SimulationRecoveryResult
+)
+async def submit_simulation_recovery(
+    simulation_id: str,
+    merchant_id: MerchantDependency,
+    service: ServiceDependency,
+) -> SimulationRecoveryResult:
+    """Submit signed synthetic payment evidence through the durable event inbox."""
+
+    _validate_reference(simulation_id, "simulation")
+    return await _map(service.submit_simulation_recovery(merchant_id, simulation_id))
 
 
 @public_simulation_router.get("/{simulation_id}", response_model=SimulationSessionView)
