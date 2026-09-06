@@ -61,6 +61,63 @@ class Merchant(TimestampColumns, Base):
     )
 
 
+class AuditLedgerHead(Base):
+    """The locked, merchant-scoped head of a forward-only audit chain."""
+
+    __tablename__ = "audit_ledger_heads"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    latest_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latest_entry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        CheckConstraint("latest_sequence >= 0", name="ck_audit_ledger_heads_sequence"),
+        CheckConstraint("latest_entry_hash ~ '^[0-9a-f]{64}$'", name="ck_audit_ledger_heads_hash"),
+    )
+
+
+class AuditEntry(Base):
+    """One immutable, redacted entry in a merchant's tamper-evident history."""
+
+    __tablename__ = "audit_entries"
+
+    merchant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    aggregate_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    causation_id: Mapped[str | None] = mapped_column(String(128))
+    actor_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor_reference: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_entry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    entry_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    policy_version: Mapped[str | None] = mapped_column(String(128))
+    model_version: Mapped[str | None] = mapped_column(String(128))
+    prompt_version: Mapped[str | None] = mapped_column(String(128))
+    schema_version: Mapped[str | None] = mapped_column(String(128))
+    feature_version: Mapped[str | None] = mapped_column(String(128))
+    application_version: Mapped[str | None] = mapped_column(String(128))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["merchant_id"], ["merchants.id"], ondelete="RESTRICT"),
+        UniqueConstraint("merchant_id", "entry_hash", name="uq_audit_entries_merchant_hash"),
+        CheckConstraint("sequence >= 1", name="ck_audit_entries_sequence"),
+        CheckConstraint("payload_sha256 ~ '^[0-9a-f]{64}$'", name="ck_audit_entries_payload_hash"),
+        CheckConstraint(
+            "previous_entry_hash ~ '^[0-9a-f]{64}$'", name="ck_audit_entries_previous_hash"
+        ),
+        CheckConstraint("entry_hash ~ '^[0-9a-f]{64}$'", name="ck_audit_entries_hash"),
+        Index("ix_audit_entries_aggregate", "merchant_id", "aggregate_type", "aggregate_id"),
+        Index("ix_audit_entries_correlation", "merchant_id", "correlation_id", "sequence"),
+    )
+
+
 class Customer(TimestampColumns, Base):
     __tablename__ = "customers"
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal, Protocol
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class DashboardPersistenceError(RuntimeError):
@@ -133,6 +134,26 @@ class ActionItem(_Contract):
     authorized_at: datetime
     unknown_since: datetime | None
     last_error_code: str | None
+    payment_link_url: str | None = None
+
+    @field_validator("payment_link_url")
+    @classmethod
+    def validate_payment_link_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlparse(value)
+        try:
+            port = parsed.port
+        except ValueError as error:
+            raise ValueError("payment link must use a standard HTTPS port") from error
+        if (
+            parsed.scheme != "https"
+            or (parsed.hostname or "").lower() not in {"rzp.io", "www.rzp.io"}
+            or not parsed.path
+            or port not in {None, 443}
+        ):
+            raise ValueError("payment link must be an HTTPS Razorpay short URL")
+        return value
 
 
 class OutcomeItem(_Contract):

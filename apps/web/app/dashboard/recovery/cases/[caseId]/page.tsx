@@ -13,6 +13,7 @@ import {
 } from "@/components/dashboard-ui";
 import { CaseTimeline } from "@/components/case-timeline";
 import { LiveRefresh } from "@/components/live-refresh";
+import { PaymentLinkAction } from "@/components/payment-link-action";
 import { getLiveCase } from "@/lib/api/live";
 import { getDashboardSession } from "@/lib/auth/session";
 
@@ -37,6 +38,9 @@ export default async function CasePage({ params }: CasePageProps) {
   const item = detail.case;
   const recentDecision = detail.decisions[0];
   const activeOutcome = detail.outcomes[0];
+  const paymentLinkAction = detail.actions.find(
+    (action) => action.action_type === "CREATE_PAYMENT_LINK" && action.payment_link_url !== null,
+  );
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -109,6 +113,7 @@ export default async function CasePage({ params }: CasePageProps) {
                 {humanize(recentDecision.selected_action_type)}
               </div>
               <p className="text-sm text-gray-600 mt-2">{recentDecision.explanation}</p>
+              {paymentLinkAction ? <PaymentLinkAction action={paymentLinkAction} /> : null}
             </div>
           ) : (
             <p className="text-sm text-gray-500 italic">

@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from httpx import ASGITransport, AsyncClient
 from revenueguard_api.config import Settings, get_settings
 from revenueguard_api.dashboard import (
+    ActionItem,
     CaseDetail,
     CaseList,
     CaseSummary,
@@ -101,7 +102,23 @@ class FakeDashboardService:
             transitions=(),
             decisions=(),
             predictions=(),
-            actions=(),
+            actions=(
+                ActionItem(
+                    action_id="action_001",
+                    action_type="CREATE_PAYMENT_LINK",
+                    target_reference_masked="PAYMENT · A1B2C3D4E5",
+                    logical_attempt=1,
+                    idempotency_key="rg:v1:merchant:case:payment-link:1",
+                    status="SUCCEEDED",
+                    attempt_count=1,
+                    max_attempts=3,
+                    policy_version="conservative-v1",
+                    authorized_at=NOW,
+                    unknown_since=None,
+                    last_error_code=None,
+                    payment_link_url="https://rzp.io/i/test-payment",
+                ),
+            ),
             outcomes=(),
             reviews=(),
         )
@@ -193,6 +210,33 @@ async def test_dashboard_case_filters_and_not_found_contract() -> None:
     assert invalid.status_code == 422
     assert missing.status_code == 404
     assert missing.json()["detail"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+async def test_dashboard_case_detail_exposes_test_payment_link_only_in_authenticated_scope() -> (
+    None
+):
+    service = FakeDashboardService()
+    async with _client(service) as client:
+        response = await client.get("/api/v1/dashboard/cases/case_001", headers=_headers())
+
+    assert response.status_code == 200
+    assert response.json()["actions"] == [
+        {
+            "action_id": "action_001",
+            "action_type": "CREATE_PAYMENT_LINK",
+            "target_reference_masked": "PAYMENT · A1B2C3D4E5",
+            "logical_attempt": 1,
+            "idempotency_key": "rg:v1:merchant:case:payment-link:1",
+            "status": "SUCCEEDED",
+            "attempt_count": 1,
+            "max_attempts": 3,
+            "policy_version": "conservative-v1",
+            "authorized_at": "2026-08-27T12:00:00Z",
+            "unknown_since": None,
+            "last_error_code": None,
+            "payment_link_url": "https://rzp.io/i/test-payment",
+        }
+    ]
 
 
 async def test_openapi_declares_dashboard_read_endpoints() -> None:

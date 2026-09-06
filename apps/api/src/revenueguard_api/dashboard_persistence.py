@@ -6,8 +6,10 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Literal, cast
+from urllib.parse import urlparse
 
 from revenueguard_integrations.persistence import (
+    ActionAttempt,
     AsyncSessionFactory,
     CaseTransition,
     DecisionReceipt,
@@ -239,6 +241,28 @@ class DatabaseDashboardQueryService:
                         )
                     ).all()
                 )
+                action_ids = tuple(action.id for action in actions)
+                attempts = (
+                    tuple(
+                        (
+                            await session.scalars(
+                                select(ActionAttempt)
+                                .where(
+                                    ActionAttempt.merchant_id == merchant_id,
+                                    ActionAttempt.recovery_action_id.in_(action_ids),
+                                    ActionAttempt.response_category == "API_ACCEPTED",
+                                )
+                                .order_by(
+                                    ActionAttempt.recovery_action_id,
+                                    ActionAttempt.attempt_number.desc(),
+                                )
+                            )
+                        ).all()
+                    )
+                    if action_ids
+                    else ()
+                )
+                payment_links = _payment_link_urls_by_action(attempts)
                 outcomes = tuple(
                     (
                         await session.scalars(
@@ -332,6 +356,7 @@ class DatabaseDashboardQueryService:
                     authorized_at=item.authorized_at,
                     unknown_since=item.unknown_since,
                     last_error_code=item.last_error_code,
+                    payment_link_url=payment_links.get(item.id),
                 )
                 for item in actions
             ),
@@ -473,3 +498,34 @@ class DatabaseDashboardQueryService:
 def _masked_reference(kind: str, value: str) -> str:
     digest = sha256(f"{kind}\0{value}".encode()).hexdigest()[:10].upper()
     return f"{kind} · {digest}"
+
+
+def _payment_link_urls_by_action(attempts: tuple[ActionAttempt, ...]) -> dict[str, str]:
+    """Expose only the newest valid Razorpay short URL for each action."""
+
+    urls: dict[str, str] = {}
+    for attempt in attempts:
+        if attempt.recovery_action_id in urls:
+            continue
+        url = _razorpay_payment_link_url(attempt.response_reference)
+        if url is not None:
+            urls[attempt.recovery_action_id] = url
+    return urls
+
+
+def _razorpay_payment_link_url(value: str | None) -> str | None:
+    if not isinstance(value, str) or len(value) > 512:
+        return None
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or (parsed.hostname or "").lower() not in {"rzp.io", "www.rzp.io"}
+        or not parsed.path
+        or port not in {None, 443}
+    ):
+        return None
+    return value

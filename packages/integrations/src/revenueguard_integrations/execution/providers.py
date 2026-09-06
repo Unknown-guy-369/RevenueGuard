@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from revenueguard_domain import ActionStatus, ActionType, EvidenceSource, RecoveryAction
@@ -250,6 +250,7 @@ class RazorpayTestModeAdapter:
         document = _json_document(response.body)
         raw_provider_id = document.get("id")
         provider_id = raw_provider_id if isinstance(raw_provider_id, str) else None
+        payment_link_url = _razorpay_test_payment_link_url(document)
         if 200 <= response.status_code < 300 and provider_id is not None:
             return ProviderExecutionResult(
                 status=ActionStatus.SUCCEEDED,
@@ -258,7 +259,7 @@ class RazorpayTestModeAdapter:
                 response_category="API_ACCEPTED",
                 provider_object_id=provider_id,
                 provider_status_code=response.status_code,
-                response_reference=response.request_reference,
+                response_reference=payment_link_url,
             )
         if response.status_code == 429:
             return ProviderExecutionResult(
@@ -379,6 +380,28 @@ def _json_document(body: bytes) -> dict[str, object]:
     except UnicodeDecodeError, json.JSONDecodeError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _razorpay_test_payment_link_url(document: Mapping[str, object]) -> str | None:
+    """Return only a Razorpay-hosted HTTPS short URL safe for an operator link."""
+
+    value = document.get("short_url")
+    if not isinstance(value, str) or len(value) > 512:
+        return None
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not parsed.path
+        or host not in {"rzp.io", "www.rzp.io"}
+        or port not in {None, 443}
+    ):
+        return None
+    return value
 
 
 def _reference_id(action: RecoveryAction) -> str:

@@ -19,6 +19,7 @@ from revenueguard_domain import VerifiedOutcome as DomainVerifiedOutcome
 from sqlalchemy import Select, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from revenueguard_integrations.persistence.audit_ledger import AuditAppend, AuditLedger
 from revenueguard_integrations.persistence.models import (
     ActionAttempt,
     RecoveryAction,
@@ -107,6 +108,26 @@ class ActionRepository:
         )
         self._session.add(row)
         await self._session.flush()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=row.merchant_id,
+                event_type="ACTION_AUTHORIZED",
+                aggregate_type="RECOVERY_ACTION",
+                aggregate_id=row.id,
+                correlation_id=row.correlation_id,
+                actor_type="SYSTEM",
+                actor_reference="recovery-service",
+                payload={
+                    "action_type": row.action_type,
+                    "logical_attempt": row.logical_attempt,
+                    "status": row.status,
+                    "target_type": row.target_type,
+                },
+                policy_version=row.policy_version,
+                schema_version=row.schema_version,
+                recorded_at=row.authorized_at,
+            )
+        )
         return row
 
     async def get_action(
@@ -247,6 +268,25 @@ class ActionRepository:
         self._session.add(attempt)
         action.updated_at = started_at
         await self._session.flush()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=merchant_id,
+                event_type="ACTION_ATTEMPT_STARTED",
+                aggregate_type="RECOVERY_ACTION",
+                aggregate_id=action_id,
+                correlation_id=action.correlation_id,
+                causation_id=attempt.id,
+                actor_type="WORKER",
+                actor_reference="action-execution",
+                payload={
+                    "attempt_number": attempt.attempt_number,
+                    "request_id": attempt.request_id,
+                },
+                policy_version=action.policy_version,
+                schema_version=action.schema_version,
+                recorded_at=started_at,
+            )
+        )
         return action, attempt
 
     async def finish_attempt(
@@ -312,6 +352,28 @@ class ActionRepository:
         if outcome_status is ActionStatus.FAILED:
             action.dead_lettered_at = completed_at
         await self._session.flush()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=merchant_id,
+                event_type="ACTION_ATTEMPT_FINISHED",
+                aggregate_type="RECOVERY_ACTION",
+                aggregate_id=action_id,
+                correlation_id=action.correlation_id,
+                causation_id=attempt.id,
+                actor_type="WORKER",
+                actor_reference="action-execution",
+                payload={
+                    "attempt_number": attempt.attempt_number,
+                    "error_code": error_code,
+                    "outcome_status": outcome_status.value,
+                    "response_category": response_category,
+                    "retryable": retryable,
+                },
+                policy_version=action.policy_version,
+                schema_version=action.schema_version,
+                recorded_at=completed_at,
+            )
+        )
         return action, attempt
 
     async def stale_inflight_actions(self, *, now: datetime, limit: int) -> list[RecoveryAction]:
@@ -410,6 +472,33 @@ class ActionRepository:
         )
         self._session.add(row)
         await self._session.flush()
+        action = await self.get_action(
+            merchant_id=outcome.merchant_id,
+            action_id=outcome.action_id,
+        )
+        if action is None:
+            raise LookupError("tenant-scoped recovery action does not exist")
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=outcome.merchant_id,
+                event_type=("OUTCOME_VERIFIED" if outcome.is_authoritative else "OUTCOME_OBSERVED"),
+                aggregate_type="RECOVERY_ACTION",
+                aggregate_id=outcome.action_id,
+                correlation_id=action.correlation_id,
+                causation_id=outcome.outcome_id,
+                actor_type="SYSTEM",
+                actor_reference="outcome-verifier",
+                payload={
+                    "currency": outcome.currency,
+                    "is_authoritative": outcome.is_authoritative,
+                    "outcome_status": outcome.outcome_status.value,
+                    "recovered_amount_minor": outcome.recovered_amount_minor,
+                },
+                policy_version=action.policy_version,
+                schema_version=outcome.schema_version,
+                recorded_at=outcome.observed_at,
+            )
+        )
         return row
 
     async def find_action_for_provider_object(

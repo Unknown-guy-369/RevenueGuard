@@ -27,6 +27,7 @@ from revenueguard_integrations.execution import (
 from revenueguard_integrations.persistence import (
     ActionAttempt,
     ActionRepository,
+    AuditEntry,
     Base,
     EventIngestionRepository,
     RecoveryAction,
@@ -268,6 +269,31 @@ async def test_api_ack_never_counts_money_and_signed_webhook_recovers_once(
         assert totals[0].recovered_amount_minor == 10_000
         assert totals[0].verified_action_count == 1
         assert await session.scalar(select(func.count()).select_from(VerifiedOutcome)) == 2
+        entries = tuple(
+            (
+                await session.scalars(
+                    select(AuditEntry)
+                    .where(AuditEntry.merchant_id == merchant_id)
+                    .order_by(AuditEntry.sequence)
+                )
+            ).all()
+        )
+        assert [
+            entry.event_type
+            for entry in entries
+            if entry.event_type
+            in {
+                "ACTION_AUTHORIZED",
+                "ACTION_ATTEMPT_STARTED",
+                "ACTION_ATTEMPT_FINISHED",
+                "OUTCOME_VERIFIED",
+            }
+        ] == [
+            "ACTION_AUTHORIZED",
+            "ACTION_ATTEMPT_STARTED",
+            "ACTION_ATTEMPT_FINISHED",
+            "OUTCOME_VERIFIED",
+        ]
 
 
 async def test_worker_loss_after_call_start_becomes_unknown_and_suppresses_duplicate(

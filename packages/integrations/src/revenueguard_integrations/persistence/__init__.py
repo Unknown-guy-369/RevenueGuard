@@ -6,6 +6,12 @@ from revenueguard_integrations.persistence.action_repositories import (
     ClaimedAction,
     RecoveryTotals,
 )
+from revenueguard_integrations.persistence.audit_ledger import (
+    AuditAppend,
+    AuditLedger,
+    AuditVerificationResult,
+    AuditVerificationStatus,
+)
 from revenueguard_integrations.persistence.database import (
     AsyncSessionFactory,
     create_database_engine,
@@ -14,6 +20,8 @@ from revenueguard_integrations.persistence.database import (
 )
 from revenueguard_integrations.persistence.models import (
     ActionAttempt,
+    AuditEntry,
+    AuditLedgerHead,
     Base,
     CaseTransition,
     CommunicationConsent,
@@ -71,6 +79,12 @@ __all__ = [
     "ActionPersistenceError",
     "ActionRepository",
     "AsyncSessionFactory",
+    "AuditAppend",
+    "AuditEntry",
+    "AuditLedger",
+    "AuditLedgerHead",
+    "AuditVerificationResult",
+    "AuditVerificationStatus",
     "AuthoritativeFacts",
     "Base",
     "CaseTransition",

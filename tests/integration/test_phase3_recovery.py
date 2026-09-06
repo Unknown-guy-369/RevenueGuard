@@ -27,7 +27,10 @@ from revenueguard_domain import (
 from revenueguard_domain import (
     RecoveryCase as DomainRecoveryCase,
 )
+from revenueguard_integrations.execution import ActionExecutionService, PreparedExecution
 from revenueguard_integrations.persistence import (
+    ActionRepository,
+    AuditEntry,
     Base,
     DecisionReceipt,
     EventDispatch,
@@ -619,6 +622,27 @@ async def test_human_approval_is_action_bound_and_rechecked_before_ready(
         assert escalated.review_id == "review_required"
 
     async with phase3_factory.begin() as session:
+        await session.execute(
+            text(
+                """
+                CREATE FUNCTION prevent_test_decision_receipt_mutation()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'decision receipts are append-only';
+                END;
+                $$ LANGUAGE plpgsql;
+                """
+            )
+        )
+        await session.execute(
+            text(
+                """
+                CREATE TRIGGER prevent_test_decision_receipt_mutation
+                AFTER UPDATE OR DELETE ON decision_receipts
+                FOR EACH ROW EXECUTE FUNCTION prevent_test_decision_receipt_mutation();
+                """
+            )
+        )
         approved = await RecoveryApplicationService(
             RecoveryRepository(session),
             clock=lambda: NOW + timedelta(minutes=1),
@@ -640,6 +664,30 @@ async def test_human_approval_is_action_bound_and_rechecked_before_ready(
         review = (await session.scalars(select(HumanReview))).one()
         assert review.status == ReviewStatus.APPROVED.value
         assert await session.scalar(select(func.count()).select_from(DecisionReceipt)) == 2
+        receipt = await session.get(DecisionReceipt, (merchant_id, "receipt_approved"))
+        assert receipt is not None
+        audit_entry = await session.scalar(
+            select(AuditEntry).where(AuditEntry.entry_id == receipt.audit_entry_id)
+        )
+        assert audit_entry is not None
+        assert audit_entry.event_type == "DECISION_RECORDED"
+
+    async with phase3_factory.begin() as session:
+        claims = await ActionRepository(session).claim_due_actions(
+            now=NOW + timedelta(minutes=1),
+            lease_for=timedelta(minutes=1),
+            limit=1,
+        )
+        assert len(claims) == 1
+        prepared = await ActionExecutionService(
+            ActionRepository(session), RecoveryRepository(session)
+        ).prepare_execution(
+            merchant_id=merchant_id,
+            action_id=claims[0].action_id,
+            lease_token=claims[0].lease_token,
+            started_at=NOW + timedelta(minutes=1, seconds=1),
+        )
+        assert isinstance(prepared, PreparedExecution)
 
 
 async def test_worker_crash_rolls_back_recovery_and_retry_creates_one_effect(

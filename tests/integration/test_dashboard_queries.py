@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 from revenueguard_api.dashboard import DashboardNotFoundError
 from revenueguard_api.dashboard_persistence import DatabaseDashboardQueryService
 from revenueguard_integrations.persistence import (
+    ActionAttempt,
     Base,
+    DecisionReceipt,
     Merchant,
+    MerchantPolicyVersion,
+    RecoveryAction,
     RecoveryCase,
     create_session_factory,
 )
@@ -60,6 +65,7 @@ async def dashboard_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]
 async def test_dashboard_queries_are_authoritative_and_tenant_scoped(
     dashboard_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    now = datetime(2026, 9, 5, 12, tzinfo=UTC)
     async with dashboard_factory.begin() as session:
         session.add_all(
             [
@@ -85,7 +91,78 @@ async def test_dashboard_queries_are_authoritative_and_tenant_scoped(
                     currency="INR",
                     state="UNKNOWN",
                 ),
+                MerchantPolicyVersion(
+                    merchant_id="merchant_one",
+                    version="test-policy-v1",
+                    snapshot={"classification": "TEST"},
+                    content_sha256="a" * 64,
+                    published_by="test-suite",
+                    effective_at=now,
+                    created_at=now,
+                ),
             ]
+        )
+        await session.flush()
+        session.add_all(
+            [
+                DecisionReceipt(
+                    merchant_id="merchant_one",
+                    id="decision_one",
+                    recovery_case_id="case_one",
+                    correlation_id="correlation_one",
+                    evidence_references=["event_one"],
+                    candidate_actions=[{"action_type": "CREATE_PAYMENT_LINK"}],
+                    selected_action_type="CREATE_PAYMENT_LINK",
+                    explanation="Generate a Test Mode payment link after policy authorization.",
+                    policy_result="PROCEED",
+                    policy_reason_codes=["POLICY_AUTHORIZED"],
+                    policy_version="test-policy-v1",
+                    version_bundle={"policy": "test-policy-v1"},
+                    resulting_action_id="action_one",
+                    resulting_state="READY",
+                    model_prediction_ids=[],
+                    created_at=now,
+                ),
+                RecoveryAction(
+                    merchant_id="merchant_one",
+                    id="action_one",
+                    recovery_case_id="case_one",
+                    decision_receipt_id="decision_one",
+                    action_type="CREATE_PAYMENT_LINK",
+                    target_type="PAYMENT",
+                    target_id="payment_one",
+                    logical_attempt=1,
+                    idempotency_key="rg:v1:merchant-one:case-one:payment-link:1",
+                    status="SUCCEEDED",
+                    parameters={"amount_minor": 10_000, "currency": "INR"},
+                    policy_version="test-policy-v1",
+                    correlation_id="correlation_one",
+                    authorized_at=now,
+                    execute_after=now,
+                    next_attempt_at=now,
+                    attempt_count=1,
+                    max_attempts=3,
+                ),
+            ]
+        )
+        await session.flush()
+        session.add(
+            ActionAttempt(
+                id="attempt_one",
+                merchant_id="merchant_one",
+                recovery_action_id="action_one",
+                attempt_number=1,
+                request_id="request_one",
+                lease_token="lease_one",
+                started_at=now,
+                completed_at=now,
+                outcome_status="SUCCEEDED",
+                response_category="API_ACCEPTED",
+                provider_object_id="plink_test_one",
+                provider_status_code=200,
+                response_reference="https://rzp.io/i/test-payment",
+                retryable=False,
+            )
         )
 
     service = DatabaseDashboardQueryService(dashboard_factory)
@@ -102,6 +179,7 @@ async def test_dashboard_queries_are_authoritative_and_tenant_scoped(
     assert listed.cases[0].subject_reference_masked.startswith("SUBSCRIPTION · ")
     assert "subscription_raw_secret_one" not in listed.model_dump_json()
     assert detail.case.case_id == "case_one"
+    assert detail.actions[0].payment_link_url == "https://rzp.io/i/test-payment"
 
     with pytest.raises(DashboardNotFoundError):
         await service.case_detail("merchant_one", "case_two")

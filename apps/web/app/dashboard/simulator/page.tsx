@@ -10,7 +10,8 @@ import {
   type SimulationSession,
 } from "@/lib/api/merchant-contracts";
 
-type Scenario = "SUCCESS" | "INSUFFICIENT_FUNDS" | "ISSUER_OUTAGE" | "TIMEOUT";
+type Scenario =
+  "SUCCESS" | "INSUFFICIENT_FUNDS" | "AUTHENTICATION_FAILURE" | "ISSUER_OUTAGE" | "TIMEOUT";
 type FlowType = "ONE_TIME" | "SUBSCRIPTION";
 
 export default function SimulatorPage() {
@@ -114,6 +115,7 @@ export default function SimulatorPage() {
                 >
                   <option value="SUCCESS">Successful payment</option>
                   <option value="INSUFFICIENT_FUNDS">Insufficient funds</option>
+                  <option value="AUTHENTICATION_FAILURE">Authentication failure</option>
                   <option value="ISSUER_OUTAGE">Issuer outage</option>
                   <option value="TIMEOUT">Gateway timeout</option>
                 </select>

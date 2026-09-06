@@ -109,6 +109,7 @@ export type LiveCaseDetail = {
     authorized_at: string;
     unknown_since: string | null;
     last_error_code: string | null;
+    payment_link_url: string | null;
   }>;
   outcomes: Array<{
     outcome_id: string;
@@ -160,6 +161,22 @@ function text(value: unknown): value is string {
 
 function nullableText(value: unknown): value is string | null {
   return value === null || text(value);
+}
+
+function nullableRazorpayPaymentLink(value: unknown): value is string | null {
+  if (value === null) return true;
+  if (!text(value)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "rzp.io" || url.hostname === "www.rzp.io") &&
+      url.pathname.length > 1 &&
+      (url.port === "" || url.port === "443")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function count(value: unknown): value is number {
@@ -344,7 +361,8 @@ export function isLiveCaseDetail(value: unknown): value is LiveCaseDetail {
         text(item.policy_version) &&
         timestamp(item.authorized_at) &&
         (item.unknown_since === null || timestamp(item.unknown_since)) &&
-        nullableText(item.last_error_code),
+        nullableText(item.last_error_code) &&
+        nullableRazorpayPaymentLink(item.payment_link_url),
     ) &&
     value.outcomes.every(
       (item) =>

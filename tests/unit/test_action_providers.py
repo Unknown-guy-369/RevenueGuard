@@ -130,6 +130,44 @@ async def test_razorpay_test_link_preserves_only_the_provider_short_url() -> Non
     assert result.response_reference == "https://rzp.io/i/test-payment"
 
 
+async def test_razorpay_test_link_never_preserves_an_untrusted_url() -> None:
+    transport = FakeTransport(
+        HttpResponse(
+            status_code=200,
+            body=b'{"id":"plink_test_001","short_url":"https://attacker.example/pay"}',
+            request_reference="https://api.razorpay.com/v1/payment_links",
+        )
+    )
+
+    result = await RazorpayTestModeAdapter(
+        key_id="rzp_test_example",
+        key_secret="secret",
+        transport=transport,
+    ).execute(_action())
+
+    assert result.status is ActionStatus.SUCCEEDED
+    assert result.response_reference is None
+
+
+async def test_razorpay_test_link_never_preserves_a_nonstandard_port() -> None:
+    transport = FakeTransport(
+        HttpResponse(
+            status_code=200,
+            body=b'{"id":"plink_test_001","short_url":"https://rzp.io:444/i/test-payment"}',
+            request_reference="https://api.razorpay.com/v1/payment_links",
+        )
+    )
+
+    result = await RazorpayTestModeAdapter(
+        key_id="rzp_test_example",
+        key_secret="secret",
+        transport=transport,
+    ).execute(_action())
+
+    assert result.status is ActionStatus.SUCCEEDED
+    assert result.response_reference is None
+
+
 async def test_razorpay_can_recover_provider_id_by_stable_reference_after_worker_loss() -> None:
     reference_id = _action().idempotency_key[-40:]
     transport = FakeTransport(

@@ -30,6 +30,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from revenueguard_integrations.persistence.audit_ledger import AuditAppend, AuditLedger
 from revenueguard_integrations.persistence.models import (
     CaseTransition as CaseTransitionRow,
 )
@@ -580,6 +581,26 @@ class RecoveryRepository:
             )
         )
         await self._session.flush()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=transition.merchant_id,
+                event_type="CASE_TRANSITION",
+                aggregate_type="RECOVERY_CASE",
+                aggregate_id=transition.case_id,
+                correlation_id=transition.correlation_id,
+                actor_type="SYSTEM",
+                actor_reference=transition.actor,
+                payload={
+                    "after_state": transition.after_state.value,
+                    "after_version": transition.after_version,
+                    "before_state": transition.before_state.value,
+                    "before_version": transition.before_version,
+                    "reason_code": transition.reason_code,
+                },
+                policy_version=transition.policy_version,
+                recorded_at=transition.occurred_at,
+            )
+        )
         return (
             await self._session.scalars(
                 select(RecoveryCase).where(
@@ -684,6 +705,24 @@ class RecoveryRepository:
         )
         self._session.add(row)
         await self._session.flush()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=review.merchant_id,
+                event_type="HUMAN_REVIEW_REQUESTED",
+                aggregate_type="HUMAN_REVIEW",
+                aggregate_id=review.review_id,
+                correlation_id=review.review_id,
+                actor_type="SYSTEM",
+                actor_reference="recovery-service",
+                payload={
+                    "proposed_action_type": review.proposed_action_type,
+                    "reason_code": review.reason_code,
+                    "status": review.status.value,
+                },
+                policy_version=review.policy_version,
+                recorded_at=review.requested_at,
+            )
+        )
         return row
 
     async def update_review_decision(
@@ -715,7 +754,7 @@ class RecoveryRepository:
             raise RecoveryPersistenceError(
                 "REVIEW_ALREADY_DECIDED", "review is missing or no longer requested"
             )
-        return (
+        row = (
             await self._session.scalars(
                 select(HumanReview).where(
                     HumanReview.merchant_id == merchant_id,
@@ -723,8 +762,46 @@ class RecoveryRepository:
                 )
             )
         ).one()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=merchant_id,
+                event_type="HUMAN_REVIEW_DECIDED",
+                aggregate_type="HUMAN_REVIEW",
+                aggregate_id=review.review_id,
+                correlation_id=review.review_id,
+                actor_type="HUMAN",
+                actor_reference=review.reviewer_id or "unknown-reviewer",
+                payload={"status": review.status.value},
+                policy_version=review.policy_version,
+                recorded_at=review.decided_at or review.requested_at,
+            )
+        )
+        return row
 
     async def store_receipt(self, receipt: DomainDecisionReceipt) -> DecisionReceipt:
+        entry = await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=receipt.merchant_id,
+                event_type="DECISION_RECORDED",
+                aggregate_type="DECISION_RECEIPT",
+                aggregate_id=receipt.receipt_id,
+                correlation_id=receipt.correlation_id,
+                actor_type="SYSTEM",
+                actor_reference="recovery-service",
+                payload={
+                    "policy_result": receipt.policy_result.value,
+                    "resulting_state": receipt.resulting_state.value,
+                    "selected_action_type": receipt.selected_action_type.value,
+                },
+                policy_version=receipt.versions.policy,
+                model_version=receipt.versions.model,
+                prompt_version=receipt.versions.prompt,
+                schema_version=receipt.versions.schema,
+                feature_version=receipt.versions.features,
+                application_version=receipt.versions.application,
+                recorded_at=receipt.created_at,
+            )
+        )
         row = DecisionReceipt(
             merchant_id=receipt.merchant_id,
             id=receipt.receipt_id,
@@ -741,7 +818,7 @@ class RecoveryRepository:
             human_review_id=receipt.human_review_id,
             resulting_action_id=receipt.resulting_action_id,
             resulting_state=receipt.resulting_state.value,
-            audit_entry_id=receipt.audit_entry_id,
+            audit_entry_id=entry.entry_id,
             model_prediction_ids=list(receipt.model_prediction_ids),
             scoring_model_version=receipt.scoring_model_version,
             scoring_feature_version=receipt.scoring_feature_version,

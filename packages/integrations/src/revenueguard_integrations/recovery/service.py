@@ -720,7 +720,11 @@ class RecoveryApplicationService:
             ),
             created_at=evaluated_at,
             resulting_state=decided_case.state,
-            human_review_id=review.review_id if review else None,
+            human_review_id=(
+                approval.review_id
+                if approval is not None
+                else review.review_id if review is not None else None
+            ),
             resulting_action_id=action.action_id if action else None,
             model_prediction_ids=tuple(
                 prediction.prediction_id for prediction in intelligence.predictions

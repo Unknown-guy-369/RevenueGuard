@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from revenueguard_integrations.persistence.audit_ledger import AuditAppend, AuditLedger
 from revenueguard_integrations.persistence.models import (
     Customer,
     EventCorrelation,
@@ -296,6 +297,23 @@ class EventIngestionRepository:
             )
         )
         await self._session.flush()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=merchant_id,
+                event_type="WEBHOOK_ACCEPTED",
+                aggregate_type="WEBHOOK_EVENT",
+                aggregate_id=event_id,
+                correlation_id=correlation_id,
+                actor_type="PROVIDER",
+                actor_reference=provider,
+                payload={
+                    "event_type": event_type,
+                    "provider_event_id": provider_event_id,
+                    "raw_payload_sha256": inserted.raw_payload_sha256,
+                },
+                recorded_at=received_at,
+            )
+        )
         return WebhookInsertResult(inserted, True, dispatch_id)
 
     async def record_invalid_webhook(
@@ -332,6 +350,23 @@ class EventIngestionRepository:
         )
         self._session.add(event)
         await self._session.flush()
+        await AuditLedger(self._session).append(
+            AuditAppend(
+                merchant_id=merchant_id,
+                event_type="WEBHOOK_REJECTED_INVALID_SIGNATURE",
+                aggregate_type="WEBHOOK_EVENT",
+                aggregate_id=event_id,
+                correlation_id=correlation_id,
+                actor_type="PROVIDER",
+                actor_reference=provider,
+                payload={
+                    "failure_code": failure_code,
+                    "payload_sha256": raw_payload_sha256,
+                    "provider_event_id": provider_event_id,
+                },
+                recorded_at=received_at,
+            )
+        )
         return event
 
     async def fetch_webhook_for_processing(

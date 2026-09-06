@@ -88,7 +88,7 @@ async def test_clean_and_0003_to_head_migrations_are_isolated_and_current() -> N
         clean_url = await _create_database(clean_name)
         _run_alembic(clean_url, "upgrade", "head")
         current = _run_alembic(clean_url, "current")
-        assert "0011_integrated_sim_recovery (head)" in current.stdout
+        assert "0012_forward_audit_ledger (head)" in current.stdout
         _run_alembic(clean_url, "check")
 
         incremental_url = await _create_database(incremental_name)
